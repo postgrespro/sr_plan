@@ -7,6 +7,11 @@
 #include "access/xact.h"
 #include "utils/lsyscache.h"
 
+#if PG_VERSION_NUM >= 100000
+#include "utils/queryenvironment.h"
+#include "catalog/index.h"
+#endif
+
 PG_MODULE_MAGIC;
 
 void	_PG_init(void);
@@ -132,6 +137,9 @@ PlannedStmt *sr_planner(Query *parse,
 	IndexScanDesc query_index_scan;
 	ScanKeyData key;
 	List *func_name_list;
+#if PG_VERSION_NUM >= 100000
+	IndexInfo *indexInfo;
+#endif
 
 	if(sr_plan_write_mode)   
 		heap_lock = RowExclusiveLock;
@@ -189,6 +197,9 @@ PlannedStmt *sr_planner(Query *parse,
 	}
 
 	query_index_rel = index_open(query_index_rel_oid, heap_lock);
+#if PG_VERSION_NUM >= 100000
+	indexInfo = BuildIndexInfo(query_index_rel);
+#endif
 	query_index_scan = index_beginscan(
 				sr_plans_heap,
 				query_index_rel,
@@ -285,7 +296,11 @@ PlannedStmt *sr_planner(Query *parse,
 						 values, nulls,
 						 &(tuple->t_self),
 						 sr_plans_heap,
+#if PG_VERSION_NUM >= 100000
+						 UNIQUE_CHECK_NO, indexInfo);
+#else
 						 UNIQUE_CHECK_NO);
+#endif
 		}
 	}
 	else
@@ -409,8 +424,12 @@ explain_jsonb_plan(PG_FUNCTION_ARGS)
 		PG_TRY();
 		{
 			ExplainOnePlan((PlannedStmt *)plan, NULL,
-					   es, NULL,
+					   es, NULL, 
+#if PG_VERSION_NUM >= 100000
+					   NULL, create_queryEnv(), NULL);
+#else
 					   NULL, NULL);
+#endif
 			PG_RETURN_TEXT_P(cstring_to_text(es->str->data));
 		}
 		PG_CATCH();

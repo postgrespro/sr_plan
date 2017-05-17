@@ -1,5 +1,6 @@
 from __future__ import print_function
 import sys
+import string
 
 from pycparser import c_ast, parse_file
 from mako.template import Template

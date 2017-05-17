@@ -24,18 +24,27 @@ static bool skip_location = false;
 	
 	def camel_split(s):
 		return (''.join(map(lambda x: x if x.islower() else " "+x, s))).split()
-%>
 
+	def __tab(text, what):
+		text2 = ''
+		for sss in text.splitlines(True):
+			if sss[0] == '\t':
+				text2 += ( what + sss[1:] )
+			else:
+				text2 += sss
+		return text2
+
+	def my_tab_2(text):
+		return __tab(text, '\t\t')
+%>
 <%def name="ser_key(var_name)">
 	key.type = jbvString;
 	key.val.string.len = strlen("${var_name}");
 	key.val.string.val = strdup("${var_name}");
 	pushJsonbValue(&state, WJB_KEY, &key);
-</%def>
-
-<%def name="ser_numeric(var_name, type_node, wjb_type='WJB_VALUE')">
+</%def><%def name="ser_numeric(var_name, type_node, wjb_type='WJB_VALUE')">
 	%if elog:
-		elog(WARNING, "Start serailize numeric ${var_name}");
+	elog(WARNING, "Start serailize numeric ${var_name}");
 	%endif
 	val.type = jbvNumeric;
 	%if type_node["name"] == "long":
@@ -45,46 +54,38 @@ static bool skip_location = false;
 	val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, Int32GetDatum(node->${var_name})));
 #endif
 	%elif type_node["name"] in ["Oid", "Index", "uint32", "AclMode", "bits32"]:
-		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, UInt32GetDatum(node->${var_name})));
+	val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, UInt32GetDatum(node->${var_name})));
 	%elif type_node["name"] in enum_likes_types:
-		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int2_numeric, Int16GetDatum(node->${var_name})));
+	val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int2_numeric, Int16GetDatum(node->${var_name})));
 	%elif type_node["name"] in ["double", "Cost", "Selectivity"]:
-		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(float8_numeric, Float8GetDatum(node->${var_name})));
+	val.val.numeric = DatumGetNumeric(DirectFunctionCall1(float8_numeric, Float8GetDatum(node->${var_name})));
 	%elif type_node["name"] in ["float"]:
-		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(float4_numeric, Float4GetDatum(node->${var_name})));
+	val.val.numeric = DatumGetNumeric(DirectFunctionCall1(float4_numeric, Float4GetDatum(node->${var_name})));
 	%else:
-		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, Int32GetDatum(node->${var_name})));
+	val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, Int32GetDatum(node->${var_name})));
 	%endif
 	pushJsonbValue(&state, ${wjb_type}, &val);
-</%def>
-
-<%def name="ser_node(var_name, type_node)">
+</%def><%def name="ser_node(var_name, type_node)" >
 	%if elog:
-		elog(WARNING, "Start serailize node ${var_name}");
+	elog(WARNING, "Start serailize node ${var_name}");
 	%endif
 	node_to_jsonb(node->${var_name}, state);
-</%def>
-
-<%def name="ser_direct_node(var_name, type_node)">
+</%def><%def name="ser_direct_node(var_name, type_node)" >
 	%if elog:
-		elog(WARNING, "Start serailize direct node ${var_name}");
+	elog(WARNING, "Start serailize direct node ${var_name}");
 	%endif
 	${ser_key(var_name)}
 	${type_node["name"]}_ser(&node->${var_name}, state, false);
-</%def>
-
-<%def name="ser_bool(var_name, type_node, wjb_type='WJB_VALUE')">
+</%def><%def name="ser_bool(var_name, type_node, wjb_type='WJB_VALUE')">
 	%if elog:
-		elog(WARNING, "Start serailize boolean ${var_name}");
+	elog(WARNING, "Start serailize boolean ${var_name}");
 	%endif
 	val.type = jbvBool;
 	val.val.boolean = node->${var_name};
 	pushJsonbValue(&state, ${wjb_type}, &val);
-</%def>
-
-<%def name="ser_string(var_name, type_node, wjb_type='WJB_VALUE')">
+</%def><%def name="ser_string(var_name, type_node, wjb_type='WJB_VALUE')">
 	%if elog:
-		elog(WARNING, "Start serailize boolean ${var_name}");
+	elog(WARNING, "Start serailize boolean ${var_name}");
 	%endif
 	if (node->${var_name} == NULL)
 	{
@@ -98,11 +99,9 @@ static bool skip_location = false;
 		val.val.string.val = (char *)node->${var_name};
 		pushJsonbValue(&state, ${wjb_type}, &val);
 	}
-</%def>
-
-<%def name="ser_array(var_name, type_node, num_col='node->numCols')">
+</%def><%def name="ser_array(var_name, type_node, num_col='node->numCols')">
 	%if elog:
-		elog(WARNING, "Start serailize array ${var_name}");
+	elog(WARNING, "Start serailize array ${var_name}");
 	%endif
 	${ser_key(var_name)}
 	pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
@@ -115,11 +114,9 @@ static bool skip_location = false;
 		%endif
 	}
 	pushJsonbValue(&state, WJB_END_ARRAY, NULL);
-</%def>
-
-<%def name="ser_bitmapset(var_name, type_node)">
+</%def><%def name="ser_bitmapset(var_name, type_node)">
 	%if elog:
-		elog(WARNING, "Start serailize bitmapset ${var_name}");
+	elog(WARNING, "Start serailize bitmapset ${var_name}");
 	%endif
 	${ser_key(var_name)}
 	pushJsonbValue(&state, WJB_KEY, &key);
@@ -141,9 +138,7 @@ static bool skip_location = false;
 		}
 		pushJsonbValue(&state, WJB_END_ARRAY, NULL);
 	}
-</%def>
-
-<%def name="ser_value(value_name, value_type)">
+</%def><%def name="ser_value(value_name, value_type)">
 	if (${value_name} == NULL)
 	{
 		JsonbValue	val;
@@ -172,12 +167,10 @@ static bool skip_location = false;
 		pushJsonbValue(&state, ${value_type}, &val);
 	}
 </%def>
-
 %for struct_name, struct in node_tree.items():
-	static
-	JsonbValue *${struct_name}_ser(const ${struct_name} *node, JsonbParseState *state, bool sub_object);
+static
+JsonbValue *${struct_name}_ser(const ${struct_name} *node, JsonbParseState *state, bool sub_object);
 %endfor
-
 
 static
 JsonbValue *datum_ser(JsonbParseState *state, Datum value, int typlen, bool typbyval)
@@ -225,164 +218,165 @@ JsonbValue *datum_ser(JsonbParseState *state, Datum value, int typlen, bool typb
 }
 
 %for struct_name, struct in node_tree.items():
-	static
-	JsonbValue *${struct_name}_ser(const ${struct_name} *node, JsonbParseState *state, bool sub_object)
+static
+JsonbValue *${struct_name}_ser(const ${struct_name} *node, JsonbParseState *state, bool sub_object)
+{
+	JsonbValue	key;
+	%if elog:
+	elog(WARNING, "Start serailize struct ${struct_name}");
+	%endif
+	if (sub_object)
 	{
-		JsonbValue	key;
-		%if elog:
-			elog(WARNING, "Start serailize struct ${struct_name}");
-		%endif
-		if (sub_object)
-		{
-			pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
-		}
-
-		%if write_type_node:
-			{
-				JsonbValue val;
-				${ser_key("node_type")}
-				val.type = jbvString;
-				val.val.string.len = strlen("${struct_name}");
-				val.val.string.val = strdup("${struct_name}");
-				pushJsonbValue(&state, WJB_VALUE, &val);
-			}
-		%endif
-
-		%for var_name, type_node in sorted(struct.items()):
-			%if not type_node["pointer"] and type_node["name"] in numeric_types:
-				%if var_name == "location":
-					if(!skip_location)
-				%endif
-				{
-					JsonbValue val;
-					${ser_key(var_name)}
-					${ser_numeric(var_name, type_node)}
-				}
-			%elif not type_node["pointer"] and type_node["name"] == "bool":
-				{
-					JsonbValue val;
-					${ser_key(var_name)}
-					${ser_bool(var_name, type_node)}
-				}
-			%elif type_node["pointer"] and type_node["name"] in node_types:
-				%if struct_name == "FuncExpr" and var_name == "args":
-					if (!remove_fake_func && remove_fake_func != ((FuncExpr *)node)->funcid) {
-						${ser_key(var_name)}
-						${ser_node(var_name, type_node)}
-					}
-				%else:
-					${ser_key(var_name)}
-					${ser_node(var_name, type_node)}
-				%endif
-			%elif not type_node["pointer"] and type_node["name"] in ["Plan", "Scan", "CreateStmt", "Join", "NodeTag", "Expr"]:
-				${ser_direct_node(var_name, type_node)}
-			%elif type_node["pointer"] and type_node["name"] == "char":
-				{
-					JsonbValue val;
-					${ser_key(var_name)}
-					${ser_string(var_name, type_node)}
-				}
-			%elif type_node["pointer"] and (type_node["name"] in numeric_types or type_node["name"] == "bool"):
-				%if "numCols" in struct:
-					{
-						int i;
-						JsonbValue val;
-						${ser_array(var_name, type_node)}
-					}
-				%elif camel_split(var_name)[0]+"NumCols" in struct:
-					{
-						int i;
-						JsonbValue val;
-						${ser_array(var_name, type_node, "node->%s" % camel_split(var_name)[0]+"NumCols")}
-					}
-				%elif len([t for v, t in struct.items() if t["name"] == "List"]) == 1:
-					{
-						int i;
-						JsonbValue val;
-						${ser_array(
-							var_name,
-							type_node,
-							"list_length(node->%s)" % [v for v, t in struct.items() if t["name"] == "List"][0]
-						)}
-					}
-				%else:
-					/* CAN'T SER ARRAY ${var_name} */
-				%endif
-				
-			%elif type_node["pointer"] and type_node["name"] == "Bitmapset":
-				{
-					JsonbValue val;
-					${ser_bitmapset(var_name, type_node)}
-				}
-			%elif not type_node["pointer"] and type_node["name"] == "Value":
-				%if elog:
-					elog(WARNING, "Start serailize Value ${var_name}");
-				%endif
-				${ser_key(var_name)}
-				${ser_value("(&node->%s)" % var_name, "WJB_VALUE")}
-			%elif not type_node["pointer"] and struct_name == "Const" and type_node["name"] == "Datum":
-				%if elog:
-					elog(WARNING, "Start serailize Datum ${var_name}");
-				%endif
-				${ser_key(var_name)}
-				if (node->constisnull)
-				{
-					JsonbValue val;
-					val.type = jbvNull;
-					pushJsonbValue(&state, WJB_VALUE, &val);
-				}
-				else
-					datum_ser(state, node->${var_name}, node->constlen, node->constbyval);
-			%else:
-				/* NOT FOUND TYPE: ${"*" if type_node["pointer"] else ""}${type_node["name"]} */
-			%endif
-		%endfor
-		%if elog:
-			elog(WARNING, "End serailize struct ${struct_name}");
-		%endif
-		if (sub_object)
-		{
-			return pushJsonbValue(&state, WJB_END_OBJECT, NULL);
-		}
-		else
-		{
-			return NULL;
-		}
+		pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
 	}
+
+	%if write_type_node:
+	{
+		JsonbValue val;
+		${capture(ser_key, "node_type") | my_tab_2}
+		val.type = jbvString;
+		val.val.string.len = strlen("${struct_name}");
+		val.val.string.val = strdup("${struct_name}");
+		pushJsonbValue(&state, WJB_VALUE, &val);
+	}
+	%endif
+
+	%for var_name, type_node in sorted(struct.items()):
+		%if not type_node["pointer"] and type_node["name"] in numeric_types:
+			%if var_name == "location":
+	if(!skip_location)
+			%endif
+	{
+		JsonbValue val;
+		${capture(ser_key, var_name) | my_tab_2 }
+		${capture(ser_numeric, var_name, type_node) | my_tab_2 }
+	}
+		%elif not type_node["pointer"] and type_node["name"] == "bool":
+	{
+		JsonbValue val;
+		${capture(ser_key, var_name) | my_tab_2 }
+		${capture(ser_bool, var_name, type_node) | my_tab_2 }
+	}
+		%elif type_node["pointer"] and type_node["name"] in node_types:
+			%if struct_name == "FuncExpr" and var_name == "args":
+	if (!remove_fake_func && remove_fake_func != ((FuncExpr *)node)->funcid) {
+		${capture(ser_key, var_name) | my_tab_2 }
+		${capture(ser_node, var_name, type_node) | my_tab_2 }
+	}
+			%else:
+	${ser_key(var_name)}
+	${ser_node(var_name, type_node)}
+			%endif
+		%elif not type_node["pointer"] and type_node["name"] in ["Plan", "Scan", "CreateStmt", "Join", "NodeTag", "Expr"]:
+	${ser_direct_node(var_name, type_node)}
+		%elif type_node["pointer"] and type_node["name"] == "char":
+	{
+		JsonbValue val;
+		${capture(ser_key, var_name) | my_tab_2 }
+		${capture(ser_string, var_name, type_node) | my_tab_2 }
+	}
+		%elif type_node["pointer"] and (type_node["name"] in numeric_types or type_node["name"] == "bool"):
+			%if "numCols" in struct:
+	{
+		int i;
+		JsonbValue val;
+		${capture(ser_array, var_name, type_node) | my_tab_2 }
+	}
+			%elif camel_split(var_name)[0]+"NumCols" in struct:
+	{
+		int i;
+		JsonbValue val;
+		${capture(ser_array, var_name, type_node, "node->%s" % camel_split(var_name)[0]+"NumCols") | my_tab_2 }
+	}
+			%elif len([t for v, t in struct.items() if t["name"] == "List"]) == 1:
+	{
+		int i;
+		JsonbValue val;
+		${capture(
+			ser_array,
+			var_name,
+			type_node,
+			"list_length(node->%s)" % [v for v, t in struct.items() if t["name"] == "List"][0]
+		) | my_tab_2 }
+	}
+			%else:
+	/* CAN'T SER ARRAY ${var_name} */
+			%endif
+			
+		%elif type_node["pointer"] and type_node["name"] == "Bitmapset":
+	{
+		JsonbValue val;
+		${capture(ser_bitmapset, var_name, type_node) | my_tab_2 }
+	}
+		%elif not type_node["pointer"] and type_node["name"] == "Value":
+			%if elog:
+	elog(WARNING, "Start serailize Value ${var_name}");
+			%endif
+	${ser_key(var_name)}
+	${ser_value("(&node->%s)" % var_name, "WJB_VALUE")}
+		%elif not type_node["pointer"] and struct_name == "Const" and type_node["name"] == "Datum":
+			%if elog:
+	elog(WARNING, "Start serailize Datum ${var_name}");
+			%endif
+	${ser_key(var_name)}
+	if (node->constisnull)
+	{
+		JsonbValue val;
+		val.type = jbvNull;
+		pushJsonbValue(&state, WJB_VALUE, &val);
+	}
+	else
+		datum_ser(state, node->${var_name}, node->constlen, node->constbyval);
+		%else:
+	/* NOT FOUND TYPE: ${"*" if type_node["pointer"] else ""}${type_node["name"]} */
+		%endif
+	%endfor
+	%if elog:
+	elog(WARNING, "End serailize struct ${struct_name}");
+	%endif
+	if (sub_object)
+	{
+		return pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	}
+	else
+	{
+		return NULL;
+	}
+}
 
 %endfor
 
 %for list_type_name in list_types:
-	static
-	JsonbValue *${list_type_name}_ser(const void *node, JsonbParseState *state)
+static
+JsonbValue *${list_type_name}_ser(const void *node, JsonbParseState *state)
+{
+	const ListCell *lc;
+	%if elog:
+	elog(WARNING, "Start serailize ${list_type_name}");
+	%endif
+	pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
+
+	foreach(lc, node)
 	{
-		const ListCell *lc;
-		%if elog:
-			elog(WARNING, "Start serailize ${list_type_name}");
+		%if list_type_name == "List":
+		${capture(ser_value, "lfirst(lc)", "WJB_ELEM") | my_tab_2}
+			else
+		node_to_jsonb(lfirst(lc), state);
+		%elif list_type_name == "IntList":
+		JsonbValue	val;
+		val.type = jbvNumeric;
+		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, Int32GetDatum(lfirst_int(lc))));
+		pushJsonbValue(&state, WJB_ELEM, &val);
+		%elif list_type_name == "OidList":
+		JsonbValue	val;
+		val.type = jbvNumeric;
+		val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, UInt32GetDatum(lfirst_int(lc))));
+		pushJsonbValue(&state, WJB_ELEM, &val);
 		%endif
-		pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
-
-		foreach(lc, node)
-		{
-			%if list_type_name == "List":
-				${ser_value("lfirst(lc)", "WJB_ELEM")}
-				else
-					node_to_jsonb(lfirst(lc), state);
-			%elif list_type_name == "IntList":
-				JsonbValue	val;
-				val.type = jbvNumeric;
-				val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, Int32GetDatum(lfirst_int(lc))));
-				pushJsonbValue(&state, WJB_ELEM, &val);
-			%elif list_type_name == "OidList":
-				JsonbValue	val;
-				val.type = jbvNumeric;
-				val.val.numeric = DatumGetNumeric(DirectFunctionCall1(int4_numeric, UInt32GetDatum(lfirst_int(lc))));
-				pushJsonbValue(&state, WJB_ELEM, &val);
-			%endif
-		}
-
-		return pushJsonbValue(&state, WJB_END_ARRAY, NULL);
 	}
+
+	return pushJsonbValue(&state, WJB_END_ARRAY, NULL);
+}
 %endfor
 
 static
@@ -394,10 +388,10 @@ JsonbValue *node_to_jsonb(const void *obj, JsonbParseState *state)
 		return pushJsonbValue(&state, WJB_VALUE, &out);
 	}
 	%for list_type_name in list_types:
-		else if (IsA(obj, ${list_type_name}))
-		{
-			return ${list_type_name}_ser(obj, state);
-		}
+	else if (IsA(obj, ${list_type_name}))
+	{
+		return ${list_type_name}_ser(obj, state);
+	}
 	%endfor
 
 	switch (nodeTag(obj))

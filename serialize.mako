@@ -108,9 +108,9 @@ static bool skip_location = false;
 	for (i = 0; i < ${num_col}; i++)
 	{
 		%if type_node["name"] == "bool":
-			${ser_bool(var_name+"[i]", type_node, "WJB_ELEM")}
+		${capture(ser_bool, var_name+"[i]", type_node, "WJB_ELEM") | my_tab_2}
 		%else:
-			${ser_numeric(var_name+"[i]", type_node, "WJB_ELEM")}
+		${capture(ser_numeric, var_name+"[i]", type_node, "WJB_ELEM") | my_tab_2}
 		%endif
 	}
 	pushJsonbValue(&state, WJB_END_ARRAY, NULL);

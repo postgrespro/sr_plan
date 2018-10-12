@@ -1,0 +1,17 @@
+.deps
+isolation_output
+results/*
+regression.diffs
+regression.out
+*.o
+*.so
+*.pyc
+*.gcda
+*.gcno
+*.gcov
+*.log
+sr_plan--*.sql
+tags
+cscope*
+Dockerfile
+testgres

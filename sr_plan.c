@@ -64,7 +64,7 @@ get_sr_plan_schema(void)
 	HeapTuple		tuple;
 	ScanKeyData		entry[1];
 	Oid				ext_schema;
-	LOCKMODE heap_lock =  AccessShareLock; 
+	LOCKMODE heap_lock =  AccessShareLock;
 
 	/* It's impossible to fetch sr_plan's schema now */
 	if (!IsTransactionState())
@@ -93,7 +93,7 @@ get_sr_plan_schema(void)
 
 	systable_endscan(scandesc);
 
-	heap_close(rel, heap_lock); 
+	heap_close(rel, heap_lock);
 
 	return result;
 }
@@ -141,7 +141,7 @@ PlannedStmt *sr_planner(Query *parse,
 	IndexInfo *indexInfo;
 #endif
 
-	if(sr_plan_write_mode)   
+	if(sr_plan_write_mode)
 		heap_lock = RowExclusiveLock;
 
 	schema_oid = get_sr_plan_schema();
@@ -169,11 +169,10 @@ PlannedStmt *sr_planner(Query *parse,
 		list_free(func_name_list);
 		pfree(schema_name);
 	}
-	
-	
+
 	out_jsonb = node_tree_to_jsonb(parse, sr_plan_fake_func, true);
 	query_hash = DatumGetInt32(DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb)));
-	
+
 	query_params = NULL;
 	/* Make list with all _p functions and his position */
 	sr_query_walker((Query *)parse, NULL);
@@ -501,7 +500,7 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 		Oid args[1];
 		dropped_objects_func = LookupFuncName(list_make1(makeString("pg_event_trigger_dropped_objects")), 0, args, true);
 	}
-	
+
 	/* Look up the function */
 	fmgr_info(dropped_objects_func, &flinfo);
 

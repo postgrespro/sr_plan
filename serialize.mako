@@ -21,7 +21,7 @@ static bool skip_location = false;
 	numeric_types += enum_likes_types
 
 	node_types = node_tags_refs + node_tags_structs
-	
+
 	def camel_split(s):
 		return (''.join(map(lambda x: x if x.islower() else " "+x, s))).split()
 
@@ -120,7 +120,7 @@ static bool skip_location = false;
 	%endif
 	${ser_key(var_name)}
 	pushJsonbValue(&state, WJB_KEY, &key);
-	
+
 	if (node->${var_name} == NULL)
 	{
 		val.type = jbvNull;

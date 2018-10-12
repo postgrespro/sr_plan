@@ -1,7 +1,10 @@
 #define __attribute__(x)
-typedef int __int128;
-
 #include "pg_config.h"
+
+#if PG_VERSION_NUM < 110000
+typedef int __int128
+#endif
+
 #include "postgres.h"
 #include "nodes/plannodes.h"
 #include "nodes/parsenodes.h"

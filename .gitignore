@@ -15,3 +15,5 @@ tags
 cscope*
 Dockerfile
 testgres
+deserialize.c
+serialize.c

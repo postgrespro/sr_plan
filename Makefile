@@ -6,6 +6,7 @@ OBJS = sr_plan.o serialize.o deserialize.o $(WIN32RES)
 EXTENSION = sr_plan
 DATA = sr_plan--1.0.sql sr_plan--unpackaged--1.0.sql
 PGFILEDESC = "sr_plan - save and read plan"
+EXTRA_CLEAN = serialize.c deserialize.c
 
 REGRESS = sr_plan
 
@@ -21,5 +22,7 @@ include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
 
-genparser:
+serialize.c deserialize.c: gen_parser.py serialize.mako deserialize.mako nodes.h
 	python gen_parser.py nodes.h `$(PG_CONFIG) --includedir-server`
+
+all: serialize.c

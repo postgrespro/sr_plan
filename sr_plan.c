@@ -233,10 +233,10 @@ PlannedStmt *sr_planner(Query *parse,
 		}
 	}
 	index_endscan(query_index_scan);
-	
+
 	if (find_ok)
 	{
-		elog(LOG, "Ok we find saved plan.");
+		elog(DEBUG1, "Saved plan was found");
 		out_jsonb2 = (Jsonb *)DatumGetPointer(PG_DETOAST_DATUM(search_values[3]));
 		if (query_params != NULL)
 			pl_stmt = jsonb_to_node_tree(out_jsonb2, &replace_fake);
@@ -248,7 +248,7 @@ PlannedStmt *sr_planner(Query *parse,
 	{
 		bool not_have_duplicate = true;
 		Datum plan_hash;
-		
+
 		pl_stmt = standard_planner(parse, cursorOptions, boundParams);
 		out_jsonb2 = node_tree_to_jsonb(pl_stmt, 0, false);
 		plan_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb2));

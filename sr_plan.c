@@ -3,7 +3,7 @@
 #include "commands/extension.h"
 #include "catalog/pg_extension.h"
 #include "catalog/indexing.h"
-#include "access/sysattr.h" 
+#include "access/sysattr.h"
 #include "access/xact.h"
 #include "utils/lsyscache.h"
 
@@ -406,7 +406,7 @@ PG_FUNCTION_INFO_V1(explain_jsonb_plan);
 Datum
 explain_jsonb_plan(PG_FUNCTION_ARGS)
 {
-	Jsonb *jsonb_plan = PG_GETARG_JSONB(0);
+	Jsonb *jsonb_plan = PG_GETARG_JSONB_P(0);
 	Node *plan;
 
 	if (jsonb_plan == NULL)
@@ -511,7 +511,7 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 	if (fcinfo_new.isnull)
 		elog(ERROR, "function %p returned NULL", (void *) pg_event_trigger_dropped_objects);
 
-	slot = MakeTupleTableSlot();
+	slot = MakeTupleTableSlotCompat();
 	ExecSetSlotDescriptor(slot, rsinfo.setDesc);
 
 	while(tuplestore_gettupleslot(rsinfo.setResult, true,

@@ -37,4 +37,23 @@ Jsonb *node_tree_to_jsonb(const void *obj, Oid fake_func, bool skip_location_fro
 void *jsonb_to_node_tree(Jsonb *json, void *(*hookPtr) (void *));
 void common_walker(const void *obj, void (*callback) (void *));
 
+/*
+ * MakeTupleTableSlot()
+ */
+#if PG_VERSION_NUM >= 110000
+#define MakeTupleTableSlotCompat() \
+	MakeTupleTableSlot(NULL)
+#else
+#define MakeTupleTableSlotCompat() \
+	MakeTupleTableSlot()
+#endif
+
+#ifndef PG_GETARG_JSONB_P
+#define PG_GETARG_JSONB_P(x)	PG_GETARG_JSONB(x)
+#endif
+
+#ifndef PG_RETURN_JSONB_P
+#define PG_RETURN_JSONB_P(x)	PG_RETURN_JSONB(x)
+#endif
+
 #endif

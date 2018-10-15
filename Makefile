@@ -14,15 +14,17 @@ ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+
+serialize.c deserialize.c: gen_parser.py serialize.mako deserialize.mako nodes.h
+	python gen_parser.py nodes.h `$(PG_CONFIG) --includedir-server`
 else
 subdir = contrib/sr_plan
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
-endif
-
 
 serialize.c deserialize.c: gen_parser.py serialize.mako deserialize.mako nodes.h
-	python gen_parser.py nodes.h `$(PG_CONFIG) --includedir-server`
+	python gen_parser.py nodes.h '$(top_srcdir)/src/include'
+endif
 
 all: serialize.c

@@ -17,3 +17,7 @@ Dockerfile
 testgres
 deserialize.c
 serialize.c
+
+pycparser
+/Mako*
+/site-packages

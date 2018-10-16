@@ -133,22 +133,29 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	IndexInfo *indexInfo;
 #endif
 
-	if(sr_plan_write_mode)
+#define call_standard_planner() \
+	(srplan_planner_hook_next ? \
+		srplan_planner_hook_next(parse, cursorOptions, boundParams) : \
+		standard_planner(parse, cursorOptions, boundParams))
+
+	if (sr_plan_write_mode)
 		heap_lock = RowExclusiveLock;
 
 	schema_oid = get_sr_plan_schema();
-	if(!OidIsValid(schema_oid))
+	if (!OidIsValid(schema_oid))
 	{
 		/* Just call standard_planner() if schema doesn't exist. */
-		return standard_planner(parse, cursorOptions, boundParams);
+		return call_standard_planner();
 	}
 
-	if(sr_plan_fake_func)
+	if (sr_plan_fake_func)
 	{
 		HeapTuple   ftup;
 		ftup = SearchSysCache1(PROCOID, ObjectIdGetDatum(sr_plan_fake_func));
-		if(!HeapTupleIsValid(ftup)) sr_plan_fake_func = 0;
-		else ReleaseSysCache(ftup);
+		if (!HeapTupleIsValid(ftup))
+			sr_plan_fake_func = 0;
+		else
+			ReleaseSysCache(ftup);
 	}
 
 	if (!sr_plan_fake_func)
@@ -172,8 +179,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	sr_plans_oid = sr_get_relname_oid(schema_oid, SR_PLANS_TABLE_NAME);
 
 	if (!OidIsValid(sr_plans_oid))
-		/* Just call standard_planner() if table doesn't exist. */
-		return standard_planner(parse, cursorOptions, boundParams);
+		return call_standard_planner();
 
 	/* Table "sr_plans" exists */
 	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
@@ -184,7 +190,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	{
 		heap_close(sr_plans_heap, heap_lock);
 		elog(WARNING, "Not found %s index", SR_PLANS_TABLE_QUERY_INDEX_NAME);
-		return standard_planner(parse, cursorOptions, boundParams);
+		return call_standard_planner();
 	}
 
 	query_index_rel = index_open(query_index_rel_oid, heap_lock);
@@ -204,9 +210,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 				F_INT4EQ,
 				Int32GetDatum(query_hash));
 
-	index_rescan(query_index_scan,
-				&key, 1,
-				NULL, 0);
+	index_rescan(query_index_scan, &key, 1, NULL, 0);
 
 	while ((local_tuple = index_getnext(query_index_scan, ForwardScanDirection)) != NULL)
 	{
@@ -235,24 +239,22 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	if (pl_stmt)
 		goto cleanup;
 
+	/* Invoke original hook if needed */
+	pl_stmt = call_standard_planner();
+
 	/* Ok, we supported duplicate query_hash but only if all plans with query_hash disabled.*/
 	if (sr_plan_write_mode)
 	{
-		bool not_have_duplicate = true;
+		bool found = false;
 		Datum plan_hash;
 
-		pl_stmt = standard_planner(parse, cursorOptions, boundParams);
 		out_jsonb2 = node_tree_to_jsonb(pl_stmt, 0, false);
 		plan_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb2));
 
 		query_index_scan = index_beginscan(sr_plans_heap,
 										   query_index_rel,
-										   SnapshotSelf,
-										   1,
-										   0);
-		index_rescan(query_index_scan,
-					 &key, 1,
-					 NULL, 0);
+										   SnapshotSelf, 1, 0);
+		index_rescan(query_index_scan, &key, 1, NULL, 0);
 		for (;;)
 		{
 			Datum		search_values[6];
@@ -270,13 +272,13 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 			/* Detect full plan duplicate */
 			if (search_values[1] == plan_hash)
 			{
-				not_have_duplicate = false;
+				found = true;
 				break;
 			}
 		}
 		index_endscan(query_index_scan);
 
-		if (not_have_duplicate)
+		if (!found)
 		{
 			Datum		values[6];
 			bool		nulls[6];
@@ -291,24 +293,23 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 			tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 			simple_heap_insert(sr_plans_heap, tuple);
+#if PG_VERSION_NUM >= 100000
 			index_insert(query_index_rel,
 						 values, nulls,
 						 &(tuple->t_self),
 						 sr_plans_heap,
-#if PG_VERSION_NUM >= 100000
 						 UNIQUE_CHECK_NO, indexInfo);
 #else
+			index_insert(query_index_rel,
+						 values, nulls,
+						 &(tuple->t_self),
+						 sr_plans_heap,
 						 UNIQUE_CHECK_NO);
 #endif
+
+			/* Make changes visible */
+			CommandCounterIncrement();
 		}
-	}
-	else
-	{
-		/* Invoke original hook if needed */
-		if (srplan_planner_hook_next)
-			pl_stmt = srplan_planner_hook_next(parse, cursorOptions, boundParams);
-		else
-			pl_stmt = standard_planner(parse, cursorOptions, boundParams);
 	}
 
 cleanup:
@@ -600,8 +601,6 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 					/* update existing entry */
 					MemSet(search_replaces, 0, sizeof(search_replaces));
 
-					search_values[4] = BoolGetDatum(false);
-					search_replaces[4] = true;
 					search_values[5] = BoolGetDatum(false);
 					search_replaces[5] = true;
 

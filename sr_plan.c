@@ -17,16 +17,17 @@ PG_MODULE_MAGIC;
 void	_PG_init(void);
 void	_PG_fini(void);
 
+planner_hook_type				srplan_planner_hook_next			= NULL;
+post_parse_analyze_hook_type	srplan_post_parse_analyze_hook_next	= NULL;
 static bool sr_plan_write_mode = false;
 
-PlannedStmt *sr_planner(Query *parse,
-						int cursorOptions,
-						ParamListInfo boundParams);
-/*static void
-PlanCacheRelCallback(Datum arg, Oid relid);*/
+static Oid sr_plan_fake_func = 0;
+static Oid dropped_objects_func = 0;
 
-void sr_analyze(ParseState *pstate,
-				Query *query);
+static PlannedStmt *sr_planner(Query *parse, int cursorOptions,
+								ParamListInfo boundParams);
+
+static void sr_analyze(ParseState *pstate, Query *query);
 
 static Oid get_sr_plan_schema(void);
 static Oid sr_get_relname_oid(Oid schema_oid, const char *relname);
@@ -34,9 +35,6 @@ bool sr_query_walker(Query *node, void *context);
 bool sr_query_expr_walker(Node *node, void *context);
 void *replace_fake(void *node);
 void walker_callback(void *node);
-
-static Oid sr_plan_fake_func = 0;
-static Oid dropped_objects_func = 0;
 
 struct QueryParams
 {
@@ -47,7 +45,8 @@ struct QueryParams
 List *query_params;
 const char *query_text;
 
-void sr_analyze(ParseState *pstate, Query *query)
+static void
+sr_analyze(ParseState *pstate, Query *query)
 {
 	query_text = pstate->p_sourcetext;
 }
@@ -111,25 +110,17 @@ static Oid sr_get_relname_oid(Oid schema_oid, const char *relname)
 	return get_relname_relid(relname, schema_oid);
 }
 
-PlannedStmt *sr_planner(Query *parse,
-						int cursorOptions,
-						ParamListInfo boundParams)
+static PlannedStmt *
+sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 {
-	PlannedStmt *pl_stmt;
+	PlannedStmt *pl_stmt = NULL;
 	Jsonb *out_jsonb;
 	Jsonb *out_jsonb2;
 	int query_hash;
 	Relation sr_plans_heap;
 	Relation query_index_rel;
 	HeapTuple tuple;
-	/* For make new tuple */
-	Datum		values[6];
-	static bool nulls[6] = {false, false, false, false, false, false};
-	/* For search tuple */
-	Datum		search_values[6];
-	static bool search_nulls[6] = {false, false, false, false, false, false};
-	bool find_ok = false;
-	LOCKMODE heap_lock =  AccessShareLock; 
+	LOCKMODE heap_lock =  AccessShareLock;
 	Oid query_index_rel_oid;
 	Oid	sr_plans_oid;
 	Oid	schema_oid;
@@ -137,6 +128,7 @@ PlannedStmt *sr_planner(Query *parse,
 	IndexScanDesc query_index_scan;
 	ScanKeyData key;
 	List *func_name_list;
+	HeapTuple local_tuple;
 #if PG_VERSION_NUM >= 100000
 	IndexInfo *indexInfo;
 #endif
@@ -215,36 +207,36 @@ PlannedStmt *sr_planner(Query *parse,
 	index_rescan(query_index_scan,
 				&key, 1,
 				NULL, 0);
-	for (;;)
-	{
-		HeapTuple local_tuple;
-		local_tuple = index_getnext(query_index_scan, ForwardScanDirection);
 
-		if (local_tuple == NULL) break;
+	while ((local_tuple = index_getnext(query_index_scan, ForwardScanDirection)) != NULL)
+	{
+		Datum		search_values[6];
+		static bool search_nulls[6];
 
 		heap_deform_tuple(local_tuple, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
 
 		/* Check enabled and validate field */
-		if (DatumGetBool(search_values[4]) &&
-			DatumGetBool(search_values[5])) {
-			find_ok = true;
+		if (DatumGetBool(search_values[4]) && DatumGetBool(search_values[5]))
+		{
+			elog(DEBUG1, "Saved plan was found");
+
+			out_jsonb2 = (Jsonb *) DatumGetPointer(PG_DETOAST_DATUM(search_values[3]));
+			if (query_params != NULL)
+				pl_stmt = jsonb_to_node_tree(out_jsonb2, &replace_fake);
+			else
+				pl_stmt = jsonb_to_node_tree(out_jsonb2, NULL);
+
 			break;
 		}
 	}
 	index_endscan(query_index_scan);
 
-	if (find_ok)
-	{
-		elog(DEBUG1, "Saved plan was found");
-		out_jsonb2 = (Jsonb *)DatumGetPointer(PG_DETOAST_DATUM(search_values[3]));
-		if (query_params != NULL)
-			pl_stmt = jsonb_to_node_tree(out_jsonb2, &replace_fake);
-		else
-			pl_stmt = jsonb_to_node_tree(out_jsonb2, NULL);
-	}
+	if (pl_stmt)
+		goto cleanup;
+
 	/* Ok, we supported duplicate query_hash but only if all plans with query_hash disabled.*/
-	else if (sr_plan_write_mode)
+	if (sr_plan_write_mode)
 	{
 		bool not_have_duplicate = true;
 		Datum plan_hash;
@@ -263,6 +255,9 @@ PlannedStmt *sr_planner(Query *parse,
 					 NULL, 0);
 		for (;;)
 		{
+			Datum		search_values[6];
+			static bool search_nulls[6];
+
 			HeapTuple local_tuple;
 			ItemPointer tid = index_getnext_tid(query_index_scan, ForwardScanDirection);
 			if (tid == NULL)
@@ -283,12 +278,17 @@ PlannedStmt *sr_planner(Query *parse,
 
 		if (not_have_duplicate)
 		{
+			Datum		values[6];
+			bool		nulls[6];
+
+			MemSet(nulls, 0, sizeof(nulls));
 			values[0] = Int32GetDatum(query_hash);
 			values[1] = plan_hash;
 			values[2] = CStringGetTextDatum(query_text);
 			values[3] = PointerGetDatum(out_jsonb2);
 			values[4] = BoolGetDatum(false);
 			values[5] = BoolGetDatum(true);
+
 			tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 			simple_heap_insert(sr_plans_heap, tuple);
 			index_insert(query_index_rel,
@@ -304,34 +304,38 @@ PlannedStmt *sr_planner(Query *parse,
 	}
 	else
 	{
-		pl_stmt = standard_planner(parse, cursorOptions, boundParams);
+		/* Invoke original hook if needed */
+		if (srplan_planner_hook_next)
+			pl_stmt = srplan_planner_hook_next(parse, cursorOptions, boundParams);
+		else
+			pl_stmt = standard_planner(parse, cursorOptions, boundParams);
 	}
-	
+
+cleanup:
 	index_close(query_index_rel, heap_lock);
 	heap_close(sr_plans_heap, heap_lock);
 	return pl_stmt;
 }
 
-bool sr_query_walker(Query *node, void *context)
+bool
+sr_query_walker(Query *node, void *context)
 {
-		if (node == NULL)
-			return false;
-		// check for nodes that special work is required for, eg:
-		if (IsA(node, FromExpr))
-		{
-			return sr_query_expr_walker((Node *)node, node);
-		}
-		
-		// for any node type not specially processed, do:
-		if (IsA(node, Query))
-		{
-			return query_tree_walker(node, sr_query_walker, node, 0);
-		}
-		else
-			return false;
+	if (node == NULL)
+		return false;
+
+	// check for nodes that special work is required for, eg:
+	if (IsA(node, FromExpr))
+		return sr_query_expr_walker((Node *)node, node);
+
+	// for any node type not specially processed, do:
+	if (IsA(node, Query))
+		return query_tree_walker(node, sr_query_walker, node, 0);
+
+	return false;
 }
 
-bool sr_query_expr_walker(Node *node, void *context)
+bool
+sr_query_expr_walker(Node *node, void *context)
 {
 	if (node == NULL)
 		return false;
@@ -370,8 +374,9 @@ void *replace_fake(void *node)
 	return node;
 }
 
-void _PG_init(void) {
-        /* elog(WARNING, "SR_Plan init"); */
+void
+_PG_init(void)
+{
 	DefineCustomBoolVariable("sr_plan.write_mode",
 							 "Save all plans for all query.",
 							 NULL,
@@ -383,14 +388,17 @@ void _PG_init(void) {
 							 NULL,
 							 NULL);
 
+	srplan_planner_hook_next = planner_hook;
 	planner_hook = &sr_planner;
-	post_parse_analyze_hook = &sr_analyze;
+
+	srplan_post_parse_analyze_hook_next	= post_parse_analyze_hook;
+	post_parse_analyze_hook	= &sr_analyze;
 }
 
-void _PG_fini(void) {
-        /* elog(WARNING, "SR_Plan finit"); */
-	planner_hook = NULL;
-	post_parse_analyze_hook = NULL;
+void
+_PG_fini(void)
+{
+	/* nothing to do */
 }
 
 PG_FUNCTION_INFO_V1(_p);
@@ -422,11 +430,13 @@ explain_jsonb_plan(PG_FUNCTION_ARGS)
 		ExplainBeginOutput(es);
 		PG_TRY();
 		{
-			ExplainOnePlan((PlannedStmt *)plan, NULL,
-					   es, NULL, 
 #if PG_VERSION_NUM >= 100000
+			ExplainOnePlan((PlannedStmt *)plan, NULL,
+					   es, NULL,
 					   NULL, create_queryEnv(), NULL);
 #else
+			ExplainOnePlan((PlannedStmt *)plan, NULL,
+					   es, NULL,
 					   NULL, NULL);
 #endif
 			PG_RETURN_TEXT_P(cstring_to_text(es->str->data));
@@ -461,9 +471,6 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 	ExprContext econtext;
 	TupleTableSlot *slot = NULL;
 	Relation sr_plans_heap;
-	Datum		search_values[6];
-	static bool search_nulls[6];
-	static bool search_replaces[6];
 	Oid sr_plans_oid;
 	HeapScanDesc heapScan;
 	Jsonb *jsonb;
@@ -517,18 +524,21 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 	while(tuplestore_gettupleslot(rsinfo.setResult, true,
 						false, slot))
 	{
+		Datum		search_values[6];
+		bool		search_nulls[6];
+		bool		search_replaces[6];
+
+		HeapTuple local_tuple;
+
 		bool isnull = false;
 		bool find_plan = false;
 		int droped_relation_oid = DatumGetInt32(slot_getattr(slot, 2, &isnull));
 		char *type_name = TextDatumGetCString(slot_getattr(slot, 7, &isnull));
-		heapScan = heap_beginscan(sr_plans_heap, SnapshotSelf, 0, (ScanKey) NULL);
-		for (;;)
-		{
-			HeapTuple local_tuple;
-			local_tuple = heap_getnext(heapScan, ForwardScanDirection);
-			if (local_tuple == NULL)
-				break;
 
+		heapScan = heap_beginscan(sr_plans_heap, SnapshotSelf, 0, (ScanKey) NULL);
+
+		while ((local_tuple = heap_getnext(heapScan, ForwardScanDirection)) != NULL)
+		{
 			heap_deform_tuple(local_tuple, sr_plans_heap->rd_att,
 							  search_values, search_nulls);
 
@@ -558,7 +568,6 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 								find_plan = true;
 								break;
 							}
-							
 						}
 					}
 				}
@@ -582,14 +591,17 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 									find_plan = true;
 									break;
 								}
-							}	
+							}
 						}
 					}
 				}
 				if (find_plan)
 				{
-					elog(WARNING, "Invalidate saved plan with query:\n\t%s", TextDatumGetCString(search_values[2]));
 					/* update existing entry */
+					MemSet(search_replaces, 0, sizeof(search_replaces));
+
+					search_values[4] = BoolGetDatum(false);
+					search_replaces[4] = true;
 					search_values[5] = BoolGetDatum(false);
 					search_replaces[5] = true;
 

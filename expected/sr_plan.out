@@ -53,11 +53,21 @@ SELECT * FROM test_table WHERE test_attr1 = 15;
 ------------+------------
 (0 rows)
 
+SELECT enable, valid, query FROM sr_plans;
+ enable | valid |                        query                        
+--------+-------+-----------------------------------------------------
+ t      | t     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
+ t      | t     | SELECT * FROM test_table WHERE test_attr1 = 10;
+(2 rows)
+
 DROP TABLE test_table;
-WARNING:  Invalidate saved plan with query:
-	SELECT * FROM test_table WHERE test_attr1 = _p(10);
-WARNING:  Invalidate saved plan with query:
-	SELECT * FROM test_table WHERE test_attr1 = 10;
+SELECT enable, valid, query FROM sr_plans;
+ enable | valid |                        query                        
+--------+-------+-----------------------------------------------------
+ f      | f     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
+ f      | f     | SELECT * FROM test_table WHERE test_attr1 = 10;
+(2 rows)
+
 CREATE TABLE test_table(test_attr1 int, test_attr2 int);
 SELECT * FROM test_table WHERE test_attr1 = _p(10);
  test_attr1 | test_attr2 

@@ -17,16 +17,16 @@ endif
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
-serialize.c deserialize.c: gen_parser.py nodes.h
-	python gen_parser.py nodes.h `$(PG_CONFIG) --includedir-server`
+dir=`$(PG_CONFIG) --includedir-server`
 else
 subdir = contrib/sr_plan
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 
-serialize.c deserialize.c: gen_parser.py nodes.h
-	python gen_parser.py nodes.h '$(top_srcdir)/src/include'
+dir='$(top_srcdir)/src/include'
 endif
 
-all: serialize.c
+# uncomment this if you need autogeneration
+#serialize.c deserialize.c: gen_parser.py nodes.h
+#	python gen_parser.py nodes.h $(dir)

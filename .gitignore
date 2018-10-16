@@ -21,3 +21,4 @@ serialize.c
 pycparser
 /Mako*
 /site-packages
+/setuptools*

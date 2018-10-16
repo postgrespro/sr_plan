@@ -21,6 +21,7 @@ popd
 pushd $current_dir
 curl -O https://files.pythonhosted.org/packages/6e/9c/6a003320b00ef237f94aa74e4ad66c57a7618f6c79d67527136e2544b728/setuptools-40.4.3.zip
 unzip setuptools-40.4.3.zip
+
 pushd setuptools-40.4.3
 python setup.py install --install-lib $pythondir --install-scripts=$pythondir/bin
 popd

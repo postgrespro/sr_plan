@@ -11,7 +11,9 @@ EXTRA_CLEAN = serialize.c deserialize.c
 REGRESS = sr_plan
 
 ifdef USE_PGXS
+ifndef PG_CONFIG
 PG_CONFIG = pg_config
+endif
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 

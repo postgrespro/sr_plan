@@ -139,7 +139,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		standard_planner(parse, cursorOptions, boundParams))
 
 	if (sr_plan_write_mode)
-		heap_lock = RowExclusiveLock;
+		heap_lock = AccessExclusiveLock;
 
 	schema_oid = get_sr_plan_schema();
 	if (!OidIsValid(schema_oid))
@@ -157,8 +157,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		else
 			ReleaseSysCache(ftup);
 	}
-
-	if (!sr_plan_fake_func)
+	else
 	{
 		Oid args[1] = {ANYELEMENTOID};
 
@@ -220,7 +219,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		heap_deform_tuple(local_tuple, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
 
-		/* Check enabled and validate field */
+		/* Check enabled and valid field */
 		if (DatumGetBool(search_values[4]) && DatumGetBool(search_values[5]))
 		{
 			elog(DEBUG1, "Saved plan was found");
@@ -239,7 +238,6 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	if (pl_stmt)
 		goto cleanup;
 
-	/* Invoke original hook if needed */
 	pl_stmt = call_standard_planner();
 
 	/* Ok, we supported duplicate query_hash but only if all plans with query_hash disabled.*/

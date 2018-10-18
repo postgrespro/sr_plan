@@ -53,7 +53,7 @@ SELECT * FROM test_table WHERE test_attr1 = 15;
 ------------+------------
 (0 rows)
 
-SELECT enable, valid, query FROM sr_plans ORDER BY query;
+SELECT enable, valid, query FROM sr_plans ORDER BY length(query);
  enable | valid |                        query                        
 --------+-------+-----------------------------------------------------
  t      | t     | SELECT * FROM test_table WHERE test_attr1 = 10;
@@ -61,7 +61,7 @@ SELECT enable, valid, query FROM sr_plans ORDER BY query;
 (2 rows)
 
 DROP TABLE test_table;
-SELECT enable, valid, query FROM sr_plans ORDER BY query;
+SELECT enable, valid, query FROM sr_plans ORDER BY length(query);
  enable | valid |                        query                        
 --------+-------+-----------------------------------------------------
  t      | f     | SELECT * FROM test_table WHERE test_attr1 = 10;

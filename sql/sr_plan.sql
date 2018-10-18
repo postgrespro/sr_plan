@@ -18,9 +18,9 @@ SELECT * FROM test_table WHERE test_attr1 = _p(15);
 SELECT * FROM test_table WHERE test_attr1 = 10;
 SELECT * FROM test_table WHERE test_attr1 = 15;
 
-SELECT enable, valid, query FROM sr_plans ORDER BY query;
+SELECT enable, valid, query FROM sr_plans ORDER BY length(query);
 DROP TABLE test_table;
-SELECT enable, valid, query FROM sr_plans ORDER BY query;
+SELECT enable, valid, query FROM sr_plans ORDER BY length(query);
 
 CREATE TABLE test_table(test_attr1 int, test_attr2 int, test_attr3 int);
 

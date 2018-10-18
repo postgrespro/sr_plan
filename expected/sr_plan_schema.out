@@ -20,7 +20,7 @@ SELECT * FROM test.test_table WHERE test_attr1 = 10;
 
 SET sr_plan.write_mode = false;
 UPDATE plan.sr_plans SET enable = TRUE;
-SELECT enable, valid, query FROM plan.sr_plans ORDER BY query;
+SELECT enable, valid, query FROM plan.sr_plans ORDER BY length(query);
  enable | valid |                             query                             
 --------+-------+---------------------------------------------------------------
  t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = 10;
@@ -28,7 +28,7 @@ SELECT enable, valid, query FROM plan.sr_plans ORDER BY query;
 (2 rows)
 
 DROP INDEX test.i1;
-SELECT enable, valid, query FROM plan.sr_plans ORDER BY query;
+SELECT enable, valid, query FROM plan.sr_plans ORDER BY length(query);
  enable | valid |                             query                             
 --------+-------+---------------------------------------------------------------
  t      | f     | SELECT * FROM test.test_table WHERE test_attr1 = 10;

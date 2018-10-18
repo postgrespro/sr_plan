@@ -53,39 +53,41 @@ SELECT * FROM test_table WHERE test_attr1 = 15;
 ------------+------------
 (0 rows)
 
-SELECT enable, valid, query FROM sr_plans ORDER BY query_hash;
+SELECT enable, valid, query FROM sr_plans ORDER BY query;
  enable | valid |                        query                        
 --------+-------+-----------------------------------------------------
- t      | t     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
  t      | t     | SELECT * FROM test_table WHERE test_attr1 = 10;
+ t      | t     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
 (2 rows)
 
 DROP TABLE test_table;
-SELECT enable, valid, query FROM sr_plans ORDER BY query_hash;
+SELECT enable, valid, query FROM sr_plans ORDER BY query;
  enable | valid |                        query                        
 --------+-------+-----------------------------------------------------
- t      | f     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
  t      | f     | SELECT * FROM test_table WHERE test_attr1 = 10;
+ t      | f     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
 (2 rows)
 
-CREATE TABLE test_table(test_attr1 int, test_attr2 int);
+CREATE TABLE test_table(test_attr1 int, test_attr2 int, test_attr3 int);
 SELECT * FROM test_table WHERE test_attr1 = _p(10);
- test_attr1 | test_attr2 
-------------+------------
+ test_attr1 | test_attr2 | test_attr3 
+------------+------------+------------
 (0 rows)
 
 SELECT * FROM test_table WHERE test_attr1 = 10;
- test_attr1 | test_attr2 
-------------+------------
+ test_attr1 | test_attr2 | test_attr3 
+------------+------------+------------
 (0 rows)
 
 SELECT * FROM test_table WHERE test_attr1 = 10;
- test_attr1 | test_attr2 
-------------+------------
+ test_attr1 | test_attr2 | test_attr3 
+------------+------------+------------
 (0 rows)
 
 SELECT * FROM test_table WHERE test_attr1 = 15;
- test_attr1 | test_attr2 
-------------+------------
+ test_attr1 | test_attr2 | test_attr3 
+------------+------------+------------
 (0 rows)
 
+DROP EXTENSION sr_plan CASCADE;
+DROP TABLE test_table;

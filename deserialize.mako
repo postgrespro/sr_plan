@@ -7,7 +7,10 @@ static List *
 list_deser(JsonbContainer *container, bool oid);
 
 typedef int (*myFuncDef)(int, int);
-static void *(*hook) (void *);
+typedef void * (*deserialize_hook_type) (void *, void *);
+
+static deserialize_hook_type hook;
+static void *hook_context;
 
 <%
 	elog = False
@@ -24,7 +27,7 @@ static void *(*hook) (void *);
 	numeric_types += enum_likes_types
 
 	node_types = node_tags_refs + node_tags_structs
-	
+
 	def camel_split(s):
 		return (''.join(map(lambda x: x if x.islower() else " "+x, s))).split()
 
@@ -38,10 +41,10 @@ static void *(*hook) (void *);
 		return text2
 
 	def my_tab_2(text):
-		return __tab(text, '\t\t')	
+		return __tab(text, '\t\t')
 
 	def my_tab_3(text):
-		return __tab(text, '\t\t\t')	
+		return __tab(text, '\t\t\t')
 %>
 <%def name="make_key(var_name, key)">
 	JsonbValue ${var_name};
@@ -53,13 +56,13 @@ static void *(*hook) (void *);
 	%if elog:
 		elog(WARNING, "Start deserailize node ${var_name}");
 	%endif
-	if (var_value->type == jbvNull) 
+	if (var_value->type == jbvNull)
 	{
 		local_node->${var_name} = NULL;
 	} else {
 		local_node->${var_name} = (${type_node["name"]} *) jsonb_to_node(var_value->val.binary.data);
 	}
-	
+
 </%def>
 <%def name="make_key_value(var_name)">
 	JsonbValue *var_value;
@@ -77,7 +80,7 @@ list_deser(JsonbContainer *container, bool oid)
 	JsonbIterator *it;
 	List *l = NIL;
 	it = JsonbIteratorInit(container);
-	
+
 	while ((type = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
 	{
 		if (type == WJB_ELEM)
@@ -197,7 +200,7 @@ list_deser(JsonbContainer *container, bool oid)
 		}
 		local_node->${var_name} = result;
 	}
-	
+
 </%def>
 
 %for struct_name, struct in node_tree.items():
@@ -253,7 +256,6 @@ datum_deser(JsonbValue *var_value, bool typbyval)
 			}
 		}
 		res = PointerGetDatum(s);
-		
 	}
 
 	return res;
@@ -337,11 +339,11 @@ void *${struct_name}_deser(JsonbContainer *container, void *node_cast, int repla
 		{
 			JsonbValue *typbyval_value;
 			${capture(make_key, "typbyval_key", "constbyval") | my_tab_3 }
-					
+
 			typbyval_value = findJsonbValueFromContainer(container,
 										JB_FOBJECT,
 										&typbyval_key);
-					
+
 			local_node->${var_name} = datum_deser(var_value, typbyval_value->val.boolean);
 		}
 			%else:
@@ -352,7 +354,7 @@ void *${struct_name}_deser(JsonbContainer *container, void *node_cast, int repla
 		%endif
 	%endfor
 	if (hook)
-		return hook(local_node);
+		return hook(local_node, hook_context);
 	else
 		return local_node;
 }
@@ -364,7 +366,7 @@ void *jsonb_to_node(JsonbContainer *container)
 {
 	JsonbValue *node_type;
 	int16 node_type_value;
-	
+
 	${make_key("node_type_key", "type")}
 
 	if (container == NULL)
@@ -406,11 +408,13 @@ void *jsonb_to_node(JsonbContainer *container)
 	return NULL;
 }
 
-void *jsonb_to_node_tree(Jsonb *json, void *(*hookPtr) (void *))
+void *
+jsonb_to_node_tree(Jsonb *json, deserialize_hook_type hook_ptr, void *context)
 {
 	void *node;
-	hook = hookPtr;
+	hook = hook_ptr;
+	hook_context = context;
 	node = jsonb_to_node(&json->root);
-	hook = NULL;
+	hook = hook_context = NULL;
 	return node;
 }

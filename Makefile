@@ -8,7 +8,7 @@ DATA = sr_plan--1.0.sql sr_plan--unpackaged--1.0.sql
 PGFILEDESC = "sr_plan - save and read plan"
 EXTRA_CLEAN = serialize.c deserialize.c
 
-REGRESS = sr_plan
+REGRESS = sr_plan sr_plan_schema
 
 ifdef USE_PGXS
 ifndef PG_CONFIG
@@ -28,5 +28,5 @@ dir='$(top_srcdir)/src/include'
 endif
 
 # uncomment this if you need autogeneration
-#serialize.c deserialize.c: gen_parser.py nodes.h
-#	python gen_parser.py nodes.h $(dir)
+serialize.c deserialize.c: gen_parser.py nodes.h serialize.mako deserialize.mako
+	python gen_parser.py nodes.h $(dir)

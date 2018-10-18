@@ -1,0 +1,59 @@
+CREATE SCHEMA plan;
+CREATE EXTENSION sr_plan SCHEMA plan;
+CREATE SCHEMA test;
+CREATE TABLE test.test_table(test_attr1 int, test_attr2 int);
+INSERT INTO test.test_table SELECT i, i + 1 FROM generate_series(1, 1000) i;
+CREATE INDEX i1 ON test.test_table(test_attr1);
+SET enable_seqscan=off;
+SET sr_plan.write_mode = true;
+SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
+
+SELECT * FROM test.test_table WHERE test_attr1 = 10;
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
+
+SET sr_plan.write_mode = false;
+UPDATE plan.sr_plans SET enable = TRUE;
+SELECT enable, valid, query FROM plan.sr_plans ORDER BY query;
+ enable | valid |                             query                             
+--------+-------+---------------------------------------------------------------
+ t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = 10;
+ t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+(2 rows)
+
+DROP INDEX test.i1;
+SELECT enable, valid, query FROM plan.sr_plans ORDER BY query;
+ enable | valid |                             query                             
+--------+-------+---------------------------------------------------------------
+ t      | f     | SELECT * FROM test.test_table WHERE test_attr1 = 10;
+ t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+(2 rows)
+
+SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
+
+SELECT * FROM test.test_table WHERE test_attr1 = 10;
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
+
+DROP SCHEMA plan CASCADE;
+NOTICE:  drop cascades to extension sr_plan
+SELECT * FROM test.test_table WHERE test_attr1 = 10;
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
+
+DROP SCHEMA test CASCADE;
+NOTICE:  drop cascades to table test.test_table

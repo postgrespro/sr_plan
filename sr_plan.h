@@ -33,8 +33,10 @@
 #define SR_PLANS_TABLE_NAME	"sr_plans"
 #define SR_PLANS_TABLE_QUERY_INDEX_NAME	"sr_plans_query_hash_idx"
 
+typedef void *(*deserialize_hook_type) (void *, void *);
+void *jsonb_to_node_tree(Jsonb *json, deserialize_hook_type hook_ptr, void *context);
+
 Jsonb *node_tree_to_jsonb(const void *obj, Oid fake_func, bool skip_location_from_node);
-void *jsonb_to_node_tree(Jsonb *json, void *(*hookPtr) (void *));
 void common_walker(const void *obj, void (*callback) (void *));
 
 /*
@@ -55,5 +57,20 @@ void common_walker(const void *obj, void (*callback) (void *));
 #ifndef PG_RETURN_JSONB_P
 #define PG_RETURN_JSONB_P(x)	PG_RETURN_JSONB(x)
 #endif
+
+#ifndef DatumGetJsonbP
+#define DatumGetJsonbP(d)	DatumGetJsonb(d)
+#endif
+
+enum
+{
+	Anum_sr_query_hash = 1,
+	Anum_sr_plan_hash,
+	Anum_sr_query,
+	Anum_sr_plan,
+	Anum_sr_enable,
+	Anum_sr_valid,
+	Anum_sr_attcount
+} sr_plans_attributes;
 
 #endif

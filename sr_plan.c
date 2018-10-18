@@ -31,15 +31,20 @@ static void sr_analyze(ParseState *pstate, Query *query);
 
 static Oid get_sr_plan_schema(void);
 static Oid sr_get_relname_oid(Oid schema_oid, const char *relname);
-bool sr_query_walker(Query *node, void *context);
-bool sr_query_expr_walker(Node *node, void *context);
-void *replace_fake(void *node);
+static bool sr_query_walker(Query *node, void *context);
+static bool sr_query_expr_walker(Node *node, void *context);
+static void *replace_fake(void *node, void *context);
 void walker_callback(void *node);
 
 struct QueryParams
 {
 	int location;
 	void *node;
+};
+
+struct QueryParamsContext
+{
+	List *params;
 };
 
 List *query_params;
@@ -102,36 +107,74 @@ get_sr_plan_schema(void)
  * InvalidOid if that's not possible.
  */
 
-static Oid sr_get_relname_oid(Oid schema_oid, const char *relname)
+static Oid
+sr_get_relname_oid(Oid schema_oid, const char *relname)
 {
-	if(schema_oid == InvalidOid) schema_oid = get_sr_plan_schema();
-	if(schema_oid == InvalidOid) return InvalidOid;
+	if (schema_oid == InvalidOid)
+		schema_oid = get_sr_plan_schema();
+
+	if (schema_oid == InvalidOid)
+		return InvalidOid;
 
 	return get_relname_relid(relname, schema_oid);
 }
 
 static PlannedStmt *
+lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
+							Relation sr_plans_heap, ScanKey key, List *query_params)
+{
+	PlannedStmt	   *pl_stmt = NULL;
+	HeapTuple		htup;
+	IndexScanDesc	query_index_scan;
+
+	query_index_scan = index_beginscan(sr_plans_heap, sr_index_rel, snapshot, 1, 0);
+	index_rescan(query_index_scan, key, 1, NULL, 0);
+
+	while ((htup = index_getnext(query_index_scan, ForwardScanDirection)) != NULL)
+	{
+		Datum		search_values[Anum_sr_attcount];
+		bool		search_nulls[Anum_sr_attcount];
+
+		heap_deform_tuple(htup, sr_plans_heap->rd_att,
+						  search_values, search_nulls);
+
+		/* Check enabled and valid field */
+		if (DatumGetBool(search_values[Anum_sr_enable - 1])
+				&& DatumGetBool(search_values[Anum_sr_valid - 1]))
+		{
+			Jsonb *out_jsonb2 = DatumGetJsonbP((search_values[3]));
+			pl_stmt = jsonb_to_node_tree(out_jsonb2, &replace_fake, query_params);
+			break;
+		}
+	}
+
+	index_endscan(query_index_scan);
+	return pl_stmt;
+}
+
+static PlannedStmt *
 sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 {
-	PlannedStmt *pl_stmt = NULL;
-	Jsonb *out_jsonb;
-	Jsonb *out_jsonb2;
-	int query_hash;
-	Relation sr_plans_heap;
-	Relation query_index_rel;
-	HeapTuple tuple;
-	LOCKMODE heap_lock =  AccessShareLock;
-	Oid query_index_rel_oid;
-	Oid	sr_plans_oid;
-	Oid	schema_oid;
-	char *schema_name;
-	IndexScanDesc query_index_scan;
-	ScanKeyData key;
-	List *func_name_list;
-	HeapTuple local_tuple;
-#if PG_VERSION_NUM >= 100000
-	IndexInfo *indexInfo;
-#endif
+	Jsonb		   *out_jsonb,
+				   *out_jsonb2;
+	int				query_hash;
+	Relation		sr_plans_heap,
+					sr_index_rel;
+	HeapTuple		tuple;
+	Oid				sr_plans_oid,
+					sr_index_oid,
+					schema_oid;
+	char		   *schema_name;
+	List		   *func_name_list;
+	Snapshot		snapshot;
+	ScanKeyData		key;
+	bool			found;
+	Datum			plan_hash;
+	IndexScanDesc	query_index_scan;
+
+	PlannedStmt	   *pl_stmt = NULL;
+	LOCKMODE		heap_lock =  AccessShareLock;
+	struct QueryParamsContext qp_context = {NULL};
 
 #define call_standard_planner() \
 	(srplan_planner_hook_next ? \
@@ -168,155 +211,134 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		pfree(schema_name);
 	}
 
-	out_jsonb = node_tree_to_jsonb(parse, sr_plan_fake_func, true);
-	query_hash = DatumGetInt32(DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb)));
-
-	query_params = NULL;
-	/* Make list with all _p functions and his position */
-	sr_query_walker((Query *)parse, NULL);
-
+	sr_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_TABLE_QUERY_INDEX_NAME);
 	sr_plans_oid = sr_get_relname_oid(schema_oid, SR_PLANS_TABLE_NAME);
 
-	if (!OidIsValid(sr_plans_oid))
-		return call_standard_planner();
+	if (sr_plans_oid == InvalidOid || sr_index_oid == InvalidOid)
+		elog(ERROR, "sr_plan extension installed incorrectly");
 
-	/* Table "sr_plans" exists */
-	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
-
-	query_index_rel_oid = sr_get_relname_oid(schema_oid, SR_PLANS_TABLE_QUERY_INDEX_NAME);
-
-	if (query_index_rel_oid == InvalidOid)
-	{
-		heap_close(sr_plans_heap, heap_lock);
-		elog(WARNING, "Not found %s index", SR_PLANS_TABLE_QUERY_INDEX_NAME);
-		return call_standard_planner();
-	}
-
-	query_index_rel = index_open(query_index_rel_oid, heap_lock);
-#if PG_VERSION_NUM >= 100000
-	indexInfo = BuildIndexInfo(query_index_rel);
-#endif
-	query_index_scan = index_beginscan(
-				sr_plans_heap,
-				query_index_rel,
-				SnapshotSelf,
-				1,
-				0
-	);
-	ScanKeyInit(&key,
-				1,
+	/* Make list with all _p functions and his position */
+	sr_query_walker((Query *) parse, &qp_context);
+	out_jsonb = node_tree_to_jsonb(parse, sr_plan_fake_func, true);
+	query_hash = DatumGetInt32(DirectFunctionCall1(jsonb_hash,
+												PointerGetDatum(out_jsonb)));
+	ScanKeyInit(&key, 1,
 				BTEqualStrategyNumber,
 				F_INT4EQ,
 				Int32GetDatum(query_hash));
 
+	/* Try to find already planned statement */
+	heap_lock = AccessShareLock;
+	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
+	sr_index_rel = index_open(sr_index_oid, heap_lock);
+
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
+										&key, qp_context.params);
+	if (pl_stmt != NULL)
+		goto cleanup;
+
+	if (!sr_plan_write_mode)
+	{
+		/* quick way out if not in write mode */
+		pl_stmt = call_standard_planner();
+		goto cleanup;
+	}
+
+	/* close and try to get AccessExclusiveLock */
+	index_close(sr_index_rel, heap_lock);
+	heap_close(sr_plans_heap, heap_lock);
+
+	heap_lock = AccessExclusiveLock;
+	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
+	sr_index_rel = index_open(sr_index_oid, heap_lock);
+
+	/* recheck plan in index */
+	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
+										&key, qp_context.params);
+	if (pl_stmt != NULL)
+		goto cleanup;
+
+	/* from now on we use this new plan */
+	pl_stmt = call_standard_planner();
+	out_jsonb2 = node_tree_to_jsonb(pl_stmt, 0, false);
+	plan_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb2));
+
+	/*
+	 * Try to find existing plan for this query and skip addding if
+	 * it already exists even it is not valid and not enabled.
+	 */
+	query_index_scan = index_beginscan(sr_plans_heap, sr_index_rel,
+									   snapshot, 1, 0);
 	index_rescan(query_index_scan, &key, 1, NULL, 0);
 
-	while ((local_tuple = index_getnext(query_index_scan, ForwardScanDirection)) != NULL)
+	found = false;
+	for (;;)
 	{
-		Datum		search_values[6];
-		static bool search_nulls[6];
+		HeapTuple	htup;
+		Datum		search_values[Anum_sr_attcount];
+		bool		search_nulls[Anum_sr_attcount];
 
-		heap_deform_tuple(local_tuple, sr_plans_heap->rd_att,
+		ItemPointer tid = index_getnext_tid(query_index_scan, ForwardScanDirection);
+		if (tid == NULL)
+			break;
+
+		htup = index_fetch_heap(query_index_scan);
+		heap_deform_tuple(htup, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
 
-		/* Check enabled and valid field */
-		if (DatumGetBool(search_values[4]) && DatumGetBool(search_values[5]))
+		/* Detect full plan duplicate */
+		if (search_values[Anum_sr_plan_hash - 1] == plan_hash)
 		{
-			elog(DEBUG1, "Saved plan was found");
-
-			out_jsonb2 = (Jsonb *) DatumGetPointer(PG_DETOAST_DATUM(search_values[3]));
-			if (query_params != NULL)
-				pl_stmt = jsonb_to_node_tree(out_jsonb2, &replace_fake);
-			else
-				pl_stmt = jsonb_to_node_tree(out_jsonb2, NULL);
-
+			found = true;
 			break;
 		}
 	}
 	index_endscan(query_index_scan);
 
-	if (pl_stmt)
-		goto cleanup;
-
-	pl_stmt = call_standard_planner();
-
-	/* Ok, we supported duplicate query_hash but only if all plans with query_hash disabled.*/
-	if (sr_plan_write_mode)
+	if (!found)
 	{
-		bool found = false;
-		Datum plan_hash;
+		Datum		values[Anum_sr_attcount];
+		bool		nulls[Anum_sr_attcount];
 
-		out_jsonb2 = node_tree_to_jsonb(pl_stmt, 0, false);
-		plan_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb2));
+		MemSet(nulls, 0, sizeof(nulls));
+		values[Anum_sr_query_hash - 1] = Int32GetDatum(query_hash);
+		values[Anum_sr_plan_hash - 1] = plan_hash;
+		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
+		values[Anum_sr_plan - 1] = PointerGetDatum(out_jsonb2);
+		values[Anum_sr_enable - 1] = BoolGetDatum(false);
+		values[Anum_sr_attcount - 1] = BoolGetDatum(true);
 
-		query_index_scan = index_beginscan(sr_plans_heap,
-										   query_index_rel,
-										   SnapshotSelf, 1, 0);
-		index_rescan(query_index_scan, &key, 1, NULL, 0);
-		for (;;)
-		{
-			Datum		search_values[6];
-			static bool search_nulls[6];
-
-			HeapTuple local_tuple;
-			ItemPointer tid = index_getnext_tid(query_index_scan, ForwardScanDirection);
-			if (tid == NULL)
-				break;
-
-			local_tuple = index_fetch_heap(query_index_scan);
-			heap_deform_tuple(local_tuple, sr_plans_heap->rd_att,
-							  search_values, search_nulls);
-
-			/* Detect full plan duplicate */
-			if (search_values[1] == plan_hash)
-			{
-				found = true;
-				break;
-			}
-		}
-		index_endscan(query_index_scan);
-
-		if (!found)
-		{
-			Datum		values[6];
-			bool		nulls[6];
-
-			MemSet(nulls, 0, sizeof(nulls));
-			values[0] = Int32GetDatum(query_hash);
-			values[1] = plan_hash;
-			values[2] = CStringGetTextDatum(query_text);
-			values[3] = PointerGetDatum(out_jsonb2);
-			values[4] = BoolGetDatum(false);
-			values[5] = BoolGetDatum(true);
-
-			tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
-			simple_heap_insert(sr_plans_heap, tuple);
+		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
+		simple_heap_insert(sr_plans_heap, tuple);
 #if PG_VERSION_NUM >= 100000
-			index_insert(query_index_rel,
-						 values, nulls,
-						 &(tuple->t_self),
-						 sr_plans_heap,
-						 UNIQUE_CHECK_NO, indexInfo);
+		index_insert(sr_index_rel,
+					 values, nulls,
+					 &(tuple->t_self),
+					 sr_plans_heap,
+					 UNIQUE_CHECK_NO, BuildIndexInfo(sr_index_rel));
 #else
-			index_insert(query_index_rel,
-						 values, nulls,
-						 &(tuple->t_self),
-						 sr_plans_heap,
-						 UNIQUE_CHECK_NO);
+		index_insert(sr_index_rel,
+					 values, nulls,
+					 &(tuple->t_self),
+					 sr_plans_heap,
+					 UNIQUE_CHECK_NO);
 #endif
 
-			/* Make changes visible */
-			CommandCounterIncrement();
-		}
+		/* Make changes visible */
+		CommandCounterIncrement();
 	}
 
 cleanup:
-	index_close(query_index_rel, heap_lock);
+	UnregisterSnapshot(snapshot);
+
+	index_close(sr_index_rel, heap_lock);
 	heap_close(sr_plans_heap, heap_lock);
+
 	return pl_stmt;
 }
 
-bool
+static bool
 sr_query_walker(Query *node, void *context)
 {
 	if (node == NULL)
@@ -324,18 +346,20 @@ sr_query_walker(Query *node, void *context)
 
 	// check for nodes that special work is required for, eg:
 	if (IsA(node, FromExpr))
-		return sr_query_expr_walker((Node *)node, node);
+		return sr_query_expr_walker((Node *)node, context);
 
 	// for any node type not specially processed, do:
 	if (IsA(node, Query))
-		return query_tree_walker(node, sr_query_walker, node, 0);
+		return query_tree_walker(node, sr_query_walker, context, 0);
 
 	return false;
 }
 
-bool
+static bool
 sr_query_expr_walker(Node *node, void *context)
 {
+	struct QueryParamsContext *qp_context = context;
+
 	if (node == NULL)
 		return false;
 
@@ -344,28 +368,36 @@ sr_query_expr_walker(Node *node, void *context)
 		struct QueryParams *param = (struct QueryParams *) palloc(sizeof(struct QueryParams));
 		param->location = ((FuncExpr *)node)->location;
 		param->node = ((FuncExpr *)node)->args->head->data.ptr_value;
-		query_params = lappend(query_params, param);
+
+		qp_context->params = lappend(qp_context->params, param);
 
 		return false;
 	}
 
-	return expression_tree_walker(node, sr_query_expr_walker, node);
+	return expression_tree_walker(node, sr_query_expr_walker, context);
 }
 
 /* Replaced params from query_params by positions*/
-void *replace_fake(void *node)
+void *
+replace_fake(void *node, void *context)
 {
+	List		*query_params = (List *) context;
+	FuncExpr	*fexpr = (FuncExpr *) node;
+
 	if (node == NULL)
 		return NULL;
 
-	if (IsA(node, FuncExpr) && ((FuncExpr *)node)->funcid == sr_plan_fake_func)
+	if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
 	{
 		ListCell *cell_params;
+
 		foreach(cell_params, query_params)
 		{
-			if (((struct QueryParams *)lfirst(cell_params))->location == ((FuncExpr *)node)->location)
+			struct QueryParams *param = lfirst(cell_params);
+
+			if (param->location == fexpr->location)
 			{
-				((FuncExpr *)node)->args->head->data.ptr_value = ((struct QueryParams *)lfirst(cell_params))->node;
+				fexpr->args->head->data.ptr_value = param->node;
 				break;
 			}
 		}
@@ -418,7 +450,8 @@ explain_jsonb_plan(PG_FUNCTION_ARGS)
 
 	if (jsonb_plan == NULL)
 		PG_RETURN_TEXT_P(cstring_to_text("Not found jsonb arg"));
-	plan = jsonb_to_node_tree(jsonb_plan, NULL);
+
+	plan = jsonb_to_node_tree(jsonb_plan, NULL, NULL);
 	if (plan == NULL)
 		PG_RETURN_TEXT_P(cstring_to_text("Not found right jsonb plan"));
 

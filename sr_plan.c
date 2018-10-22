@@ -5,7 +5,9 @@
 #include "catalog/indexing.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
+#include "access/hash.h"
 #include "utils/lsyscache.h"
+#include "utils/fmgrprotos.h"
 
 #if PG_VERSION_NUM >= 100000
 #include "utils/queryenvironment.h"
@@ -33,7 +35,6 @@ static Oid get_sr_plan_schema(void);
 static Oid sr_get_relname_oid(Oid schema_oid, const char *relname);
 static bool sr_query_walker(Query *node, void *context);
 static bool sr_query_expr_walker(Node *node, void *context);
-static void *replace_fake(void *node, void *context);
 void walker_callback(void *node);
 
 struct QueryParams
@@ -44,7 +45,8 @@ struct QueryParams
 
 struct QueryParamsContext
 {
-	List *params;
+	bool	collect;
+	List   *params;
 };
 
 List *query_params;
@@ -142,8 +144,9 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 		if (DatumGetBool(search_values[Anum_sr_enable - 1])
 				&& DatumGetBool(search_values[Anum_sr_valid - 1]))
 		{
-			Jsonb *out_jsonb2 = DatumGetJsonbP((search_values[3]));
-			pl_stmt = jsonb_to_node_tree(out_jsonb2, &replace_fake, query_params);
+			char *out = TextDatumGetCString(DatumGetTextP((search_values[3])));
+			pl_stmt = stringToNode(out);
+			/* TODO: replace params back */
 			break;
 		}
 	}
@@ -155,8 +158,6 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 static PlannedStmt *
 sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 {
-	Jsonb		   *out_jsonb,
-				   *out_jsonb2;
 	Datum			query_hash;
 	Relation		sr_plans_heap,
 					sr_index_rel;
@@ -165,6 +166,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 					sr_index_oid,
 					schema_oid;
 	char		   *schema_name;
+	char		   *temp,
+				   *plan_text;
 	List		   *func_name_list;
 	Snapshot		snapshot;
 	ScanKeyData		key;
@@ -174,7 +177,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	PlannedStmt	   *pl_stmt = NULL;
 	LOCKMODE		heap_lock =  AccessShareLock;
-	struct QueryParamsContext qp_context = {NULL};
+	struct QueryParamsContext qp_context = {true, NULL};
 
 	static int		level = 0;
 
@@ -222,8 +225,9 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* Make list with all _p functions and his position */
 	sr_query_walker((Query *) parse, &qp_context);
-	out_jsonb = node_tree_to_jsonb(parse, sr_plan_fake_func, true);
-	query_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb));
+	temp = nodeToString(parse);
+	query_hash = hash_any((unsigned char *) temp, strlen(temp));
+	pfree(temp);
 	ScanKeyInit(&key, 1, BTEqualStrategyNumber, F_INT4EQ, query_hash);
 
 	/* Try to find already planned statement */
@@ -264,8 +268,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	/* from now on we use this new plan */
 	pl_stmt = call_standard_planner();
 	level--;
-	out_jsonb2 = node_tree_to_jsonb(pl_stmt, 0, false);
-	plan_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb2));
+	plan_text = nodeToString(pl_stmt);
+	plan_hash = hash_any((unsigned char *) plan_text, strlen(plan_text));
 
 	/*
 	 * Try to find existing plan for this query and skip addding if
@@ -308,7 +312,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		values[Anum_sr_query_hash - 1] = query_hash;
 		values[Anum_sr_plan_hash - 1] = plan_hash;
 		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
-		values[Anum_sr_plan - 1] = PointerGetDatum(out_jsonb2);
+		values[Anum_sr_plan - 1] = CStringGetTextDatum(plan_text);
 		values[Anum_sr_enable - 1] = BoolGetDatum(false);
 		values[Anum_sr_valid - 1] = BoolGetDatum(true);
 
@@ -363,39 +367,29 @@ static bool
 sr_query_expr_walker(Node *node, void *context)
 {
 	struct QueryParamsContext *qp_context = context;
-
-	if (node == NULL)
-		return false;
-
-	if (IsA(node, FuncExpr) && ((FuncExpr *)node)->funcid == sr_plan_fake_func)
-	{
-		struct QueryParams *param = (struct QueryParams *) palloc(sizeof(struct QueryParams));
-		param->location = ((FuncExpr *)node)->location;
-		param->node = ((FuncExpr *)node)->args->head->data.ptr_value;
-
-		qp_context->params = lappend(qp_context->params, param);
-
-		return false;
-	}
-
-	return expression_tree_walker(node, sr_query_expr_walker, context);
-}
-
-/* Replaced params from query_params by positions*/
-void *
-replace_fake(void *node, void *context)
-{
-	List		*query_params = (List *) context;
 	FuncExpr	*fexpr = (FuncExpr *) node;
 
 	if (node == NULL)
-		return NULL;
+		return false;
 
-	if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
+	if (qp_context->collect)
+	{
+		if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
+		{
+			struct QueryParams *param = (struct QueryParams *) palloc(sizeof(struct QueryParams));
+			param->location = fexpr->location;
+			param->node = fexpr->args->head->data.ptr_value;
+
+			qp_context->params = lappend(qp_context->params, param);
+
+			return false;
+		}
+	}
+	else
 	{
 		ListCell *cell_params;
 
-		foreach(cell_params, query_params)
+		foreach(cell_params, qp_context->params)
 		{
 			struct QueryParams *param = lfirst(cell_params);
 
@@ -406,7 +400,8 @@ replace_fake(void *node, void *context)
 			}
 		}
 	}
-	return node;
+
+	return expression_tree_walker(node, sr_query_expr_walker, context);
 }
 
 void

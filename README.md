@@ -6,7 +6,7 @@ sr_plan looks like Oracle Outline system. It can be used to lock the execution p
 
 ## Build
 
-Dependencies: >= Python 3.2, Mako, pycparser 
+Dependencies: >= Python 3.2, Mako, pycparser >= 2.19
 If you only have a Python you can use the virtual environment:
 ```bash
 virtualenv env
@@ -23,7 +23,7 @@ make USE_PGXS=1 install
 
 and modify your postgres config:
 ```
-shared_preload_libraries = 'sr_plan.so'
+shared_preload_libraries = 'sr_plan'
 ```
 
 ## Usage

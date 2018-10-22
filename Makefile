@@ -28,5 +28,5 @@ dir='$(top_srcdir)/src/include'
 endif
 
 # uncomment this if you need autogeneration
-#serialize.c deserialize.c: gen_parser.py nodes.h serialize.mako deserialize.mako
-#	python gen_parser.py nodes.h $(dir)
+serialize.c deserialize.c: gen_parser.py nodes.h serialize.mako deserialize.mako
+	python gen_parser.py nodes.h $(dir)

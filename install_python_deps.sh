@@ -21,6 +21,7 @@ popd
 pushd $current_dir
 git clone https://github.com/pypa/setuptools.git
 pushd setuptools
+python bootstrap.py
 python setup.py install --install-lib $pythondir --install-scripts=$pythondir/bin
 popd
 rm -rf ./setuptools
@@ -29,12 +30,10 @@ popd
 # Mako
 pushd $currentdir
 makover=1.0.7
-curl -O https://files.pythonhosted.org/packages/eb/f3/67579bb486517c0d49547f9697e36582cd19dafb5df9e687ed8e22de57fa/Mako-$makover.tar.gz
-tar xf Mako-$makover.tar.gz
-pushd Mako-$makover
+git clone https://bitbucket.org/zzzeek/mako.git
+pushd mako
 python setup.py install --install-lib $pythondir --install-scripts=$pythondir/bin
 popd
 
-rm Mako-$makover.tar.gz
-rm -rf ./Mako-$makover
+rm -rf ./mako
 popd

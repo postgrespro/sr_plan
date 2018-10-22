@@ -176,6 +176,10 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	LOCKMODE		heap_lock =  AccessShareLock;
 	struct QueryParamsContext qp_context = {NULL};
 
+	static int		level = 0;
+
+	level++;
+
 #define call_standard_planner() \
 	(srplan_planner_hook_next ? \
 		srplan_planner_hook_next(parse, cursorOptions, boundParams) : \
@@ -185,7 +189,9 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	if (!OidIsValid(schema_oid))
 	{
 		/* Just call standard_planner() if schema doesn't exist. */
-		return call_standard_planner();
+		pl_stmt = call_standard_planner();
+		level--;
+		return pl_stmt;
 	}
 
 	if (sr_plan_fake_func)
@@ -235,10 +241,11 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	if (pl_stmt != NULL)
 		goto cleanup;
 
-	if (!sr_plan_write_mode)
+	if (!sr_plan_write_mode || level > 1)
 	{
 		/* quick way out if not in write mode */
 		pl_stmt = call_standard_planner();
+		level--;
 		goto cleanup;
 	}
 
@@ -260,6 +267,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* from now on we use this new plan */
 	pl_stmt = call_standard_planner();
+	level--;
 	out_jsonb2 = node_tree_to_jsonb(pl_stmt, 0, false);
 	plan_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb2));
 

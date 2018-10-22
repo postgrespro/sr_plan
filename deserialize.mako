@@ -7,7 +7,6 @@ static List *
 list_deser(JsonbContainer *container, bool oid);
 
 typedef int (*myFuncDef)(int, int);
-typedef void * (*deserialize_hook_type) (void *, void *);
 
 static deserialize_hook_type hook;
 static void *hook_context;

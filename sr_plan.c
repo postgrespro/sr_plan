@@ -157,7 +157,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 {
 	Jsonb		   *out_jsonb,
 				   *out_jsonb2;
-	int				query_hash;
+	Datum			query_hash;
 	Relation		sr_plans_heap,
 					sr_index_rel;
 	HeapTuple		tuple;
@@ -223,12 +223,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	/* Make list with all _p functions and his position */
 	sr_query_walker((Query *) parse, &qp_context);
 	out_jsonb = node_tree_to_jsonb(parse, sr_plan_fake_func, true);
-	query_hash = DatumGetInt32(DirectFunctionCall1(jsonb_hash,
-												PointerGetDatum(out_jsonb)));
-	ScanKeyInit(&key, 1,
-				BTEqualStrategyNumber,
-				F_INT4EQ,
-				Int32GetDatum(query_hash));
+	query_hash = DirectFunctionCall1(jsonb_hash, PointerGetDatum(out_jsonb));
+	ScanKeyInit(&key, 1, BTEqualStrategyNumber, F_INT4EQ, query_hash);
 
 	/* Try to find already planned statement */
 	heap_lock = AccessShareLock;
@@ -309,7 +305,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		bool		nulls[Anum_sr_attcount];
 
 		MemSet(nulls, 0, sizeof(nulls));
-		values[Anum_sr_query_hash - 1] = Int32GetDatum(query_hash);
+		values[Anum_sr_query_hash - 1] = query_hash;
 		values[Anum_sr_plan_hash - 1] = plan_hash;
 		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
 		values[Anum_sr_plan - 1] = PointerGetDatum(out_jsonb2);
@@ -318,15 +314,13 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 		simple_heap_insert(sr_plans_heap, tuple);
-
-		/* Make changes visible */
-		CommandCounterIncrement();
 #if PG_VERSION_NUM >= 100000
 		index_insert(sr_index_rel,
 					 values, nulls,
 					 &(tuple->t_self),
 					 sr_plans_heap,
-					 UNIQUE_CHECK_NO, BuildIndexInfo(sr_index_rel));
+					 UNIQUE_CHECK_NO,
+					 NULL);
 #else
 		index_insert(sr_index_rel,
 					 values, nulls,

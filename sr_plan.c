@@ -318,6 +318,9 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 		simple_heap_insert(sr_plans_heap, tuple);
+
+		/* Make changes visible */
+		CommandCounterIncrement();
 #if PG_VERSION_NUM >= 100000
 		index_insert(sr_index_rel,
 					 values, nulls,

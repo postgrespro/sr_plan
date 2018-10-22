@@ -307,7 +307,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
 		values[Anum_sr_plan - 1] = PointerGetDatum(out_jsonb2);
 		values[Anum_sr_enable - 1] = BoolGetDatum(false);
-		values[Anum_sr_attcount - 1] = BoolGetDatum(true);
+		values[Anum_sr_valid - 1] = BoolGetDatum(true);
 
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 		simple_heap_insert(sr_plans_heap, tuple);
@@ -632,8 +632,8 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 					/* update existing entry */
 					MemSet(search_replaces, 0, sizeof(search_replaces));
 
-					search_values[5] = BoolGetDatum(false);
-					search_replaces[5] = true;
+					search_values[Anum_sr_valid - 1] = BoolGetDatum(false);
+					search_replaces[Anum_sr_valid - 1] = true;
 
 					newtuple = heap_modify_tuple(local_tuple, RelationGetDescr(sr_plans_heap),
 										 search_values, search_nulls, search_replaces);

@@ -181,9 +181,6 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		srplan_planner_hook_next(parse, cursorOptions, boundParams) : \
 		standard_planner(parse, cursorOptions, boundParams))
 
-	if (sr_plan_write_mode)
-		heap_lock = AccessExclusiveLock;
-
 	schema_oid = get_sr_plan_schema();
 	if (!OidIsValid(schema_oid))
 	{
@@ -245,7 +242,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		goto cleanup;
 	}
 
-	/* close and try to get AccessExclusiveLock */
+	/* close and get AccessExclusiveLock */
+	UnregisterSnapshot(snapshot);
 	index_close(sr_index_rel, heap_lock);
 	heap_close(sr_plans_heap, heap_lock);
 
@@ -254,6 +252,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	sr_index_rel = index_open(sr_index_oid, heap_lock);
 
 	/* recheck plan in index */
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
 										&key, qp_context.params);
 	if (pl_stmt != NULL)

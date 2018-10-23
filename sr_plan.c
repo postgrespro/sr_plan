@@ -8,6 +8,7 @@
 #include "access/hash.h"
 #include "utils/lsyscache.h"
 #include "utils/fmgrprotos.h"
+#include "miscadmin.h"
 
 #if PG_VERSION_NUM >= 100000
 #include "utils/queryenvironment.h"
@@ -16,12 +17,16 @@
 
 PG_MODULE_MAGIC;
 
-void	_PG_init(void);
-void	_PG_fini(void);
+PG_FUNCTION_INFO_V1(sr_plan_invalid_table);
+PG_FUNCTION_INFO_V1(_p);
 
-planner_hook_type				srplan_planner_hook_next			= NULL;
-post_parse_analyze_hook_type	srplan_post_parse_analyze_hook_next	= NULL;
+void _PG_init(void);
+void _PG_fini(void);
+
+static planner_hook_type srplan_planner_hook_next = NULL;
+post_parse_analyze_hook_type srplan_post_parse_analyze_hook_next = NULL;
 static bool sr_plan_write_mode = false;
+static int sr_plan_log_usage = 0;
 
 static Oid sr_plan_fake_func = 0;
 static Oid dropped_objects_func = 0;
@@ -37,9 +42,18 @@ static bool sr_query_walker(Query *node, void *context);
 static bool sr_query_expr_walker(Node *node, void *context);
 void walker_callback(void *node);
 
-struct QueryParams
+static void plan_tree_visitor(Plan *plan,
+				  void (*visitor) (Plan *plan, void *context),
+				  void *context);
+static void execute_for_plantree(PlannedStmt *planned_stmt,
+					 void (*proc) (void *context, Plan *plan),
+					 void *context);
+static void restore_params(void *context, Plan *plan);
+
+struct QueryParam
 {
 	int location;
+	int funccollid;
 	void *node;
 };
 
@@ -121,9 +135,21 @@ sr_get_relname_oid(Oid schema_oid, const char *relname)
 	return get_relname_relid(relname, schema_oid);
 }
 
+static void
+params_restore_visitor(Plan *plan, void *context)
+{
+	expression_tree_walker((Node *) plan->qual, sr_query_expr_walker, context);
+}
+
+static void
+restore_params(void *context, Plan *plan)
+{
+	plan_tree_visitor(plan, params_restore_visitor, context);
+}
+
 static PlannedStmt *
 lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
-							Relation sr_plans_heap, ScanKey key, List *query_params)
+							Relation sr_plans_heap, ScanKey key, void *context)
 {
 	PlannedStmt	   *pl_stmt = NULL;
 	HeapTuple		htup;
@@ -146,7 +172,8 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 		{
 			char *out = TextDatumGetCString(DatumGetTextP((search_values[3])));
 			pl_stmt = stringToNode(out);
-			/* TODO: replace params back */
+
+			execute_for_plantree(pl_stmt, restore_params, context);
 			break;
 		}
 	}
@@ -235,11 +262,17 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
 	sr_index_rel = index_open(sr_index_oid, heap_lock);
 
+	qp_context.collect = false;
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
-										&key, qp_context.params);
+										&key, &qp_context);
 	if (pl_stmt != NULL)
+	{
+		if (sr_plan_log_usage > 0)
+			elog(sr_plan_log_usage, "cached plan was used for query: %s", query_text);
+
 		goto cleanup;
+	}
 
 	if (!sr_plan_write_mode || level > 1)
 	{
@@ -261,7 +294,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	/* recheck plan in index */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
-										&key, qp_context.params);
+										&key, &qp_context);
 	if (pl_stmt != NULL)
 		goto cleanup;
 
@@ -313,7 +346,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		values[Anum_sr_plan_hash - 1] = plan_hash;
 		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
 		values[Anum_sr_plan - 1] = CStringGetTextDatum(plan_text);
-		values[Anum_sr_enable - 1] = BoolGetDatum(false);
+		values[Anum_sr_enable - 1] = BoolGetDatum(true);
 		values[Anum_sr_valid - 1] = BoolGetDatum(true);
 
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
@@ -372,37 +405,61 @@ sr_query_expr_walker(Node *node, void *context)
 	if (node == NULL)
 		return false;
 
-	if (qp_context->collect)
+	if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
 	{
-		if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
+		if (qp_context->collect)
 		{
-			struct QueryParams *param = (struct QueryParams *) palloc(sizeof(struct QueryParams));
+			struct QueryParam *param = (struct QueryParam *) palloc(sizeof(struct QueryParam));
 			param->location = fexpr->location;
 			param->node = fexpr->args->head->data.ptr_value;
+			param->funccollid = fexpr->funccollid;
+			fexpr->funccollid = fexpr->location;
+
+			if (sr_plan_log_usage)
+				elog(sr_plan_log_usage, "collected parameter on %d", param->location);
 
 			qp_context->params = lappend(qp_context->params, param);
 
 			return false;
 		}
-	}
-	else
-	{
-		ListCell *cell_params;
-
-		foreach(cell_params, qp_context->params)
+		else
 		{
-			struct QueryParams *param = lfirst(cell_params);
+			ListCell	*lc;
 
-			if (param->location == fexpr->location)
+			foreach(lc, qp_context->params)
 			{
-				fexpr->args->head->data.ptr_value = param->node;
-				break;
+				struct QueryParam *param = lfirst(lc);
+
+				if (param->location == fexpr->funccollid)
+				{
+					fexpr->funccollid = param->funccollid;
+					fexpr->args->head->data.ptr_value = param->node;
+					if (sr_plan_log_usage)
+						elog(sr_plan_log_usage, "restored parameter on %d", param->location);
+
+					break;
+				}
 			}
 		}
 	}
 
 	return expression_tree_walker(node, sr_query_expr_walker, context);
 }
+
+static const struct config_enum_entry log_usage_options[] = {
+	{"none", 0, true},
+	{"debug", DEBUG2, true},
+	{"debug5", DEBUG5, false},
+	{"debug4", DEBUG4, false},
+	{"debug3", DEBUG3, false},
+	{"debug2", DEBUG2, false},
+	{"debug1", DEBUG1, false},
+	{"log", LOG, false},
+	{"info", INFO, true},
+	{"notice", NOTICE, false},
+	{"warning", WARNING, false},
+	{NULL, 0, false}
+};
 
 void
 _PG_init(void)
@@ -413,6 +470,18 @@ _PG_init(void)
 							 &sr_plan_write_mode,
 							 false,
 							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomEnumVariable("sr_plan.log_usage",
+							 "Log cached plan usage with specified level",
+							 NULL,
+							 &sr_plan_log_usage,
+							 0,
+							 log_usage_options,
+							 PGC_USERSET,
 							 0,
 							 NULL,
 							 NULL,
@@ -431,67 +500,11 @@ _PG_fini(void)
 	/* nothing to do */
 }
 
-PG_FUNCTION_INFO_V1(_p);
-
 Datum
 _p(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 }
-
-PG_FUNCTION_INFO_V1(explain_jsonb_plan);
-
-Datum
-explain_jsonb_plan(PG_FUNCTION_ARGS)
-{
-	Jsonb *jsonb_plan = PG_GETARG_JSONB_P(0);
-	Node *plan;
-
-	if (jsonb_plan == NULL)
-		PG_RETURN_TEXT_P(cstring_to_text("Not found jsonb arg"));
-
-	plan = jsonb_to_node_tree(jsonb_plan, NULL, NULL);
-	if (plan == NULL)
-		PG_RETURN_TEXT_P(cstring_to_text("Not found right jsonb plan"));
-
-	if (IsA(plan, PlannedStmt))
-	{
-		ExplainState *es = NewExplainState();
-		es->costs = false;
-		ExplainBeginOutput(es);
-		PG_TRY();
-		{
-#if PG_VERSION_NUM >= 100000
-			ExplainOnePlan((PlannedStmt *)plan, NULL,
-					   es, NULL,
-					   NULL, create_queryEnv(), NULL);
-#else
-			ExplainOnePlan((PlannedStmt *)plan, NULL,
-					   es, NULL,
-					   NULL, NULL);
-#endif
-			PG_RETURN_TEXT_P(cstring_to_text(es->str->data));
-		}
-		PG_CATCH();
-		{
-			/* Magic hack but work. In ExplainOnePlan we twice touched snapshot before die.*/
-			UnregisterSnapshot(GetActiveSnapshot());
-			UnregisterSnapshot(GetActiveSnapshot());
-			PopActiveSnapshot();
-			ExplainEndOutput(es);
-			PG_RETURN_TEXT_P(cstring_to_text("Invalid plan"));
-		}
-		PG_END_TRY();
-		ExplainEndOutput(es);
-	}
-	else
-	{
-		PG_RETURN_TEXT_P(cstring_to_text("Not found plan"));
-	}
-}
-
-
-PG_FUNCTION_INFO_V1(sr_plan_invalid_table);
 
 Datum
 sr_plan_invalid_table(PG_FUNCTION_ARGS)
@@ -525,7 +538,6 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 
 	rsinfo.type = T_ReturnSetInfo;
 	rsinfo.econtext = &econtext;
-	//rsinfo.expectedDesc = fcache->funcResultDesc;
 	rsinfo.allowedModes = (int) (SFRM_ValuePerCall | SFRM_Materialize);
 	/* note we do not set SFRM_Materialize_Random or _Preferred */
 	rsinfo.returnMode = SFRM_Materialize;
@@ -552,8 +564,7 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 	slot = MakeTupleTableSlotCompat();
 	ExecSetSlotDescriptor(slot, rsinfo.setDesc);
 
-	while(tuplestore_gettupleslot(rsinfo.setResult, true,
-						false, slot))
+	while (tuplestore_gettupleslot(rsinfo.setResult, true, false, slot))
 	{
 		Datum		search_values[6];
 		bool		search_nulls[6];
@@ -645,4 +656,85 @@ sr_plan_invalid_table(PG_FUNCTION_ARGS)
 	heap_close(sr_plans_heap, RowExclusiveLock);
 
 	PG_RETURN_NULL();
+}
+
+/*
+ * Basic plan tree walker.
+ *
+ * 'visitor' is applied right before return.
+ */
+static void
+plan_tree_visitor(Plan *plan,
+				  void (*visitor) (Plan *plan, void *context),
+				  void *context)
+{
+	ListCell   *l;
+
+	if (plan == NULL)
+		return;
+
+	check_stack_depth();
+
+	/* Plan-type-specific fixes */
+	switch (nodeTag(plan))
+	{
+		case T_SubqueryScan:
+			plan_tree_visitor(((SubqueryScan *) plan)->subplan, visitor, context);
+			break;
+
+		case T_CustomScan:
+			foreach (l, ((CustomScan *) plan)->custom_plans)
+				plan_tree_visitor((Plan *) lfirst(l), visitor, context);
+			break;
+
+		case T_ModifyTable:
+			foreach (l, ((ModifyTable *) plan)->plans)
+				plan_tree_visitor((Plan *) lfirst(l), visitor, context);
+			break;
+
+		case T_Append:
+			foreach (l, ((Append *) plan)->appendplans)
+				plan_tree_visitor((Plan *) lfirst(l), visitor, context);
+			break;
+
+		case T_MergeAppend:
+			foreach (l, ((MergeAppend *) plan)->mergeplans)
+				plan_tree_visitor((Plan *) lfirst(l), visitor, context);
+			break;
+
+		case T_BitmapAnd:
+			foreach (l, ((BitmapAnd *) plan)->bitmapplans)
+				plan_tree_visitor((Plan *) lfirst(l), visitor, context);
+			break;
+
+		case T_BitmapOr:
+			foreach (l, ((BitmapOr *) plan)->bitmapplans)
+				plan_tree_visitor((Plan *) lfirst(l), visitor, context);
+			break;
+
+		default:
+			break;
+	}
+
+	plan_tree_visitor(plan->lefttree, visitor, context);
+	plan_tree_visitor(plan->righttree, visitor, context);
+
+	/* Apply visitor to the current node */
+	visitor(plan, context);
+}
+
+static void
+execute_for_plantree(PlannedStmt *planned_stmt,
+					 void (*proc) (void *context, Plan *plan),
+					 void *context)
+{
+	ListCell	*lc;
+
+	proc(context, planned_stmt->planTree);
+
+	foreach (lc, planned_stmt->subplans)
+	{
+		Plan	*subplan = lfirst(lc);
+		proc(context, subplan);
+	}
 }

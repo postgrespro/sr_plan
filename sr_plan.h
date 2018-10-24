@@ -32,6 +32,7 @@
 
 #define SR_PLANS_TABLE_NAME	"sr_plans"
 #define SR_PLANS_TABLE_QUERY_INDEX_NAME	"sr_plans_query_hash_idx"
+#define SR_PLANS_RELOIDS_INDEX "sr_plans_query_oids"
 
 typedef void *(*deserialize_hook_type) (void *, void *);
 void *jsonb_to_node_tree(Jsonb *json, deserialize_hook_type hook_ptr, void *context);
@@ -70,6 +71,7 @@ enum
 	Anum_sr_plan,
 	Anum_sr_enable,
 	Anum_sr_valid,
+	Anum_sr_reloids,
 	Anum_sr_attcount
 } sr_plans_attributes;
 

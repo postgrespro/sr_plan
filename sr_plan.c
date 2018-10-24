@@ -268,6 +268,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 										&key, &qp_context);
 	if (pl_stmt != NULL)
 	{
+		level--;
 		if (sr_plan_log_usage > 0)
 			elog(sr_plan_log_usage, "cached plan was used for query: %s", query_text);
 
@@ -296,7 +297,10 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
 										&key, &qp_context);
 	if (pl_stmt != NULL)
+	{
+		level--;
 		goto cleanup;
+	}
 
 	/* from now on we use this new plan */
 	pl_stmt = call_standard_planner();
@@ -338,19 +342,53 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	if (!found)
 	{
+		Relation	reloids_index_rel;
+		Oid			reloids_index_oid;
+
+		ArrayType  *reloids = NULL;
 		Datum		values[Anum_sr_attcount];
 		bool		nulls[Anum_sr_attcount];
 
+		int			reloids_len = list_length(pl_stmt->relationOids);
+
+		/* prepare relation for reloids index too */
+		reloids_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_RELOIDS_INDEX);
+		reloids_index_rel = index_open(reloids_index_oid, heap_lock);
+
 		MemSet(nulls, 0, sizeof(nulls));
+
 		values[Anum_sr_query_hash - 1] = query_hash;
 		values[Anum_sr_plan_hash - 1] = plan_hash;
 		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
 		values[Anum_sr_plan - 1] = CStringGetTextDatum(plan_text);
 		values[Anum_sr_enable - 1] = BoolGetDatum(true);
 		values[Anum_sr_valid - 1] = BoolGetDatum(true);
+		values[Anum_sr_reloids - 1] = (Datum) 0;
+
+		/* save related oids */
+		if (reloids_len)
+		{
+			int			pos;
+			ListCell   *lc;
+			Datum	   *reloids_arr = palloc(sizeof(Datum) * reloids_len);
+
+			pos = 0;
+			foreach(lc, pl_stmt->relationOids)
+			{
+				reloids_arr[pos] = ObjectIdGetDatum(lfirst_oid(lc));
+				pos++;
+			}
+			reloids = construct_array(reloids_arr, reloids_len, OIDOID,
+											 sizeof(Oid), true, 'i');
+			values[Anum_sr_reloids - 1] = PointerGetDatum(reloids);
+
+			pfree(reloids_arr);
+		}
+		else nulls[Anum_sr_reloids - 1] = true;
 
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 		simple_heap_insert(sr_plans_heap, tuple);
+
 #if PG_VERSION_NUM >= 100000
 		index_insert(sr_index_rel,
 					 values, nulls,
@@ -358,13 +396,35 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 					 sr_plans_heap,
 					 UNIQUE_CHECK_NO,
 					 NULL);
+
+		if (reloids)
+		{
+			index_insert(reloids_index_rel,
+						 &values[Anum_sr_reloids - 1],
+						 &nulls[Anum_sr_reloids-1],
+						 &(tuple->t_self),
+						 sr_plans_heap,
+						 UNIQUE_CHECK_NO,
+						 BuildIndexInfo(reloids_index_rel));
+		}
 #else
 		index_insert(sr_index_rel,
 					 values, nulls,
 					 &(tuple->t_self),
 					 sr_plans_heap,
 					 UNIQUE_CHECK_NO);
+
+		if (reloids)
+		{
+			index_insert(reloids_index_rel,
+						 &values[Anum_sr_reloids - 1],
+						 &nulls[Anum_sr_reloids-1],
+						 &(tuple->t_self),
+						 sr_plans_heap,
+						 UNIQUE_CHECK_NO);
+		}
 #endif
+		index_close(reloids_index_rel, heap_lock);
 
 		/* Make changes visible */
 		CommandCounterIncrement();
@@ -419,8 +479,6 @@ sr_query_expr_walker(Node *node, void *context)
 				elog(sr_plan_log_usage, "collected parameter on %d", param->location);
 
 			qp_context->params = lappend(qp_context->params, param);
-
-			return false;
 		}
 		else
 		{
@@ -441,6 +499,8 @@ sr_query_expr_walker(Node *node, void *context)
 				}
 			}
 		}
+
+		return false;
 	}
 
 	return expression_tree_walker(node, sr_query_expr_walker, context);

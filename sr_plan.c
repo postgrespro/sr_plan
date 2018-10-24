@@ -7,7 +7,6 @@
 #include "access/xact.h"
 #include "access/hash.h"
 #include "utils/lsyscache.h"
-#include "utils/fmgrprotos.h"
 #include "utils/memutils.h"
 #include "miscadmin.h"
 

@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/postgrespro/sr_plan.svg?branch=master)](https://travis-ci.org/postgrespro/sr_plan)
+
 # Save and restore query plans in PostgreSQL
 
 ## Rationale

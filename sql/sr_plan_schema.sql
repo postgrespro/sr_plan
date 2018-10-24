@@ -14,11 +14,15 @@ SET sr_plan.write_mode = false;
 
 UPDATE plan.sr_plans SET enable = TRUE;
 
-SELECT enable, valid, query FROM plan.sr_plans ORDER BY length(query);
+SELECT enable, query FROM plan.sr_plans ORDER BY length(query);
+EXPLAIN (COSTS OFF) SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+EXPLAIN (COSTS OFF) SELECT * FROM test.test_table WHERE test_attr1 = 10;
+
 DROP INDEX test.i1;
-SELECT enable, valid, query FROM plan.sr_plans ORDER BY length(query);
+SELECT enable, query FROM plan.sr_plans ORDER BY length(query);
 
 SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+SELECT * FROM test.test_table WHERE test_attr1 = plan._p(20);
 SELECT * FROM test.test_table WHERE test_attr1 = 10;
 
 DROP SCHEMA plan CASCADE;

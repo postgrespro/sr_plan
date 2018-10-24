@@ -33,6 +33,7 @@
 #define SR_PLANS_TABLE_NAME	"sr_plans"
 #define SR_PLANS_TABLE_QUERY_INDEX_NAME	"sr_plans_query_hash_idx"
 #define SR_PLANS_RELOIDS_INDEX "sr_plans_query_oids"
+#define SR_PLANS_INDEX_RELOIDS_INDEX "sr_plans_query_index_oids"
 
 typedef void *(*deserialize_hook_type) (void *, void *);
 void *jsonb_to_node_tree(Jsonb *json, deserialize_hook_type hook_ptr, void *context);
@@ -49,6 +50,13 @@ void common_walker(const void *obj, void (*callback) (void *));
 #else
 #define MakeTupleTableSlotCompat() \
 	MakeTupleTableSlot()
+#endif
+
+#if PG_VERSION_NUM >= 100000
+#define index_insert_compat(rel,v,n,t,h,u) \
+	index_insert(rel,v,n,t,h,u, BuildIndexInfo(rel))
+#else
+#define index_insert_compat(rel,v,n,t,h,u) index_insert(rel,v,n,t,h,u)
 #endif
 
 #ifndef PG_GETARG_JSONB_P
@@ -70,8 +78,8 @@ enum
 	Anum_sr_query,
 	Anum_sr_plan,
 	Anum_sr_enable,
-	Anum_sr_valid,
 	Anum_sr_reloids,
+	Anum_sr_index_reloids,
 	Anum_sr_attcount
 } sr_plans_attributes;
 

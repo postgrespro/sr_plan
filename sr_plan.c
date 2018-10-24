@@ -8,6 +8,7 @@
 #include "access/hash.h"
 #include "utils/lsyscache.h"
 #include "utils/fmgrprotos.h"
+#include "utils/memutils.h"
 #include "miscadmin.h"
 
 #if PG_VERSION_NUM >= 100000
@@ -17,7 +18,6 @@
 
 PG_MODULE_MAGIC;
 
-PG_FUNCTION_INFO_V1(sr_plan_invalid_table);
 PG_FUNCTION_INFO_V1(_p);
 
 void _PG_init(void);
@@ -29,7 +29,6 @@ static bool sr_plan_write_mode = false;
 static int sr_plan_log_usage = 0;
 
 static Oid sr_plan_fake_func = 0;
-static Oid dropped_objects_func = 0;
 
 static PlannedStmt *sr_planner(Query *parse, int cursorOptions,
 								ParamListInfo boundParams);
@@ -49,6 +48,8 @@ static void execute_for_plantree(PlannedStmt *planned_stmt,
 					 void (*proc) (void *context, Plan *plan),
 					 void *context);
 static void restore_params(void *context, Plan *plan);
+static Datum get_query_hash(Query *node);
+static void collect_indexid(void *context, Plan *plan);
 
 struct QueryParam
 {
@@ -61,6 +62,11 @@ struct QueryParamsContext
 {
 	bool	collect;
 	List   *params;
+};
+
+struct IndexIds
+{
+	List   *ids;
 };
 
 List *query_params;
@@ -139,12 +145,45 @@ static void
 params_restore_visitor(Plan *plan, void *context)
 {
 	expression_tree_walker((Node *) plan->qual, sr_query_expr_walker, context);
+	expression_tree_walker((Node *) plan->targetlist, sr_query_expr_walker, context);
 }
 
 static void
 restore_params(void *context, Plan *plan)
 {
 	plan_tree_visitor(plan, params_restore_visitor, context);
+}
+
+static void
+collect_indexid_visitor(Plan *plan, void *context)
+{
+	struct IndexIds		*index_ids = context;
+	if (plan == NULL)
+		return;
+
+	if (IsA(plan, IndexScan))
+	{
+		IndexScan	*scan = (IndexScan *) plan;
+		index_ids->ids = lappend_oid(index_ids->ids, scan->indexid);
+	}
+
+	if (IsA(plan, IndexOnlyScan))
+	{
+		IndexOnlyScan	*scan = (IndexOnlyScan *) plan;
+		index_ids->ids = lappend_oid(index_ids->ids, scan->indexid);
+	}
+
+	if (IsA(plan, BitmapIndexScan))
+	{
+		BitmapIndexScan	*scan = (BitmapIndexScan *) plan;
+		index_ids->ids = lappend_oid(index_ids->ids, scan->indexid);
+	}
+}
+
+static void
+collect_indexid(void *context, Plan *plan)
+{
+	plan_tree_visitor(plan, collect_indexid_visitor, context);
 }
 
 static PlannedStmt *
@@ -166,9 +205,8 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 		heap_deform_tuple(htup, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
 
-		/* Check enabled and valid field */
-		if (DatumGetBool(search_values[Anum_sr_enable - 1])
-				&& DatumGetBool(search_values[Anum_sr_valid - 1]))
+		/* Check enabled field */
+		if (DatumGetBool(search_values[Anum_sr_enable - 1]))
 		{
 			char *out = TextDatumGetCString(DatumGetTextP((search_values[3])));
 			pl_stmt = stringToNode(out);
@@ -193,8 +231,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 					sr_index_oid,
 					schema_oid;
 	char		   *schema_name;
-	char		   *temp,
-				   *plan_text;
+	char		   *plan_text;
 	List		   *func_name_list;
 	Snapshot		snapshot;
 	ScanKeyData		key;
@@ -252,9 +289,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* Make list with all _p functions and his position */
 	sr_query_walker((Query *) parse, &qp_context);
-	temp = nodeToString(parse);
-	query_hash = hash_any((unsigned char *) temp, strlen(temp));
-	pfree(temp);
+	query_hash = get_query_hash(parse);
 	ScanKeyInit(&key, 1, BTEqualStrategyNumber, F_INT4EQ, query_hash);
 
 	/* Try to find already planned statement */
@@ -270,7 +305,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	{
 		level--;
 		if (sr_plan_log_usage > 0)
-			elog(sr_plan_log_usage, "cached plan was used for query: %s", query_text);
+			elog(sr_plan_log_usage, "sr_plan: cached plan was used for query: %s", query_text);
 
 		goto cleanup;
 	}
@@ -332,7 +367,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 						  search_values, search_nulls);
 
 		/* Detect full plan duplicate */
-		if (search_values[Anum_sr_plan_hash - 1] == plan_hash)
+		if (DatumGetInt32(search_values[Anum_sr_plan_hash - 1]) == DatumGetInt32(plan_hash))
 		{
 			found = true;
 			break;
@@ -342,10 +377,16 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	if (!found)
 	{
+		struct IndexIds	index_ids = {NIL};
+
 		Relation	reloids_index_rel;
 		Oid			reloids_index_oid;
 
+		Relation	index_reloids_index_rel;
+		Oid			index_reloids_index_oid;
+
 		ArrayType  *reloids = NULL;
+		ArrayType  *index_reloids = NULL;
 		Datum		values[Anum_sr_attcount];
 		bool		nulls[Anum_sr_attcount];
 
@@ -355,15 +396,19 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		reloids_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_RELOIDS_INDEX);
 		reloids_index_rel = index_open(reloids_index_oid, heap_lock);
 
+		/* prepare relation for reloids index too */
+		index_reloids_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_INDEX_RELOIDS_INDEX);
+		index_reloids_index_rel = index_open(index_reloids_index_oid, heap_lock);
+
 		MemSet(nulls, 0, sizeof(nulls));
 
 		values[Anum_sr_query_hash - 1] = query_hash;
 		values[Anum_sr_plan_hash - 1] = plan_hash;
 		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
 		values[Anum_sr_plan - 1] = CStringGetTextDatum(plan_text);
-		values[Anum_sr_enable - 1] = BoolGetDatum(true);
-		values[Anum_sr_valid - 1] = BoolGetDatum(true);
+		values[Anum_sr_enable - 1] = BoolGetDatum(false);
 		values[Anum_sr_reloids - 1] = (Datum) 0;
+		values[Anum_sr_index_reloids - 1] = (Datum) 0;
 
 		/* save related oids */
 		if (reloids_len)
@@ -386,29 +431,36 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		}
 		else nulls[Anum_sr_reloids - 1] = true;
 
+		/* saved related index oids */
+		execute_for_plantree(pl_stmt, collect_indexid, (void *) &index_ids);
+		if (list_length(index_ids.ids))
+		{
+			int len = list_length(index_ids.ids);
+			int			pos;
+			ListCell   *lc;
+			Datum	   *ids_arr = palloc(sizeof(Datum) * len);
+
+			pos = 0;
+			foreach(lc, index_ids.ids)
+			{
+				ids_arr[pos] = ObjectIdGetDatum(lfirst_oid(lc));
+				pos++;
+			}
+			index_reloids = construct_array(ids_arr, len, OIDOID,
+											 sizeof(Oid), true, 'i');
+			values[Anum_sr_index_reloids - 1] = PointerGetDatum(index_reloids);
+
+			pfree(ids_arr);
+		}
+		else nulls[Anum_sr_index_reloids - 1] = true;
+
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 		simple_heap_insert(sr_plans_heap, tuple);
 
-#if PG_VERSION_NUM >= 100000
-		index_insert(sr_index_rel,
-					 values, nulls,
-					 &(tuple->t_self),
-					 sr_plans_heap,
-					 UNIQUE_CHECK_NO,
-					 NULL);
+		if (sr_plan_log_usage)
+			elog(sr_plan_log_usage, "sr_plan: saved plan for %s", query_text);
 
-		if (reloids)
-		{
-			index_insert(reloids_index_rel,
-						 &values[Anum_sr_reloids - 1],
-						 &nulls[Anum_sr_reloids-1],
-						 &(tuple->t_self),
-						 sr_plans_heap,
-						 UNIQUE_CHECK_NO,
-						 BuildIndexInfo(reloids_index_rel));
-		}
-#else
-		index_insert(sr_index_rel,
+		index_insert_compat(sr_index_rel,
 					 values, nulls,
 					 &(tuple->t_self),
 					 sr_plans_heap,
@@ -416,15 +468,26 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 		if (reloids)
 		{
-			index_insert(reloids_index_rel,
+			index_insert_compat(reloids_index_rel,
 						 &values[Anum_sr_reloids - 1],
 						 &nulls[Anum_sr_reloids-1],
 						 &(tuple->t_self),
 						 sr_plans_heap,
 						 UNIQUE_CHECK_NO);
 		}
-#endif
+
+		if (index_reloids)
+		{
+			index_insert_compat(index_reloids_index_rel,
+						 &values[Anum_sr_index_reloids - 1],
+						 &nulls[Anum_sr_index_reloids-1],
+						 &(tuple->t_self),
+						 sr_plans_heap,
+						 UNIQUE_CHECK_NO);
+		}
+
 		index_close(reloids_index_rel, heap_lock);
+		index_close(index_reloids_index_rel, heap_lock);
 
 		/* Make changes visible */
 		CommandCounterIncrement();
@@ -473,10 +536,12 @@ sr_query_expr_walker(Node *node, void *context)
 			param->location = fexpr->location;
 			param->node = fexpr->args->head->data.ptr_value;
 			param->funccollid = fexpr->funccollid;
+
+			/* HACK: location could lost after planning */
 			fexpr->funccollid = fexpr->location;
 
 			if (sr_plan_log_usage)
-				elog(sr_plan_log_usage, "collected parameter on %d", param->location);
+				elog(sr_plan_log_usage, "sr_plan: collected parameter on %d", param->location);
 
 			qp_context->params = lappend(qp_context->params, param);
 		}
@@ -493,7 +558,7 @@ sr_query_expr_walker(Node *node, void *context)
 					fexpr->funccollid = param->funccollid;
 					fexpr->args->head->data.ptr_value = param->node;
 					if (sr_plan_log_usage)
-						elog(sr_plan_log_usage, "restored parameter on %d", param->location);
+						elog(sr_plan_log_usage, "sr_plan: restored parameter on %d", param->location);
 
 					break;
 				}
@@ -504,6 +569,66 @@ sr_query_expr_walker(Node *node, void *context)
 	}
 
 	return expression_tree_walker(node, sr_query_expr_walker, context);
+}
+
+static bool
+sr_query_fake_const_expr_walker(Node *node, void *context)
+{
+	FuncExpr	*fexpr = (FuncExpr *) node;
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
+	{
+		Const		   *fakeconst;
+
+		fakeconst = makeConst(23, -1,  0, 4, (Datum) 0, false, true);
+		fexpr->args = list_make1(fakeconst);
+	}
+
+	return expression_tree_walker(node, sr_query_fake_const_expr_walker, context);
+}
+
+static bool
+sr_query_fake_const_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	// check for nodes that special work is required for, eg:
+	if (IsA(node, FromExpr))
+		return sr_query_fake_const_expr_walker(node, context);
+
+	// for any node type not specially processed, do:
+	if (IsA(node, Query))
+		return query_tree_walker((Query *) node, sr_query_fake_const_walker, context, 0);
+
+	return false;
+}
+
+static Datum
+get_query_hash(Query *node)
+{
+	Datum			result;
+	Node		   *copy;
+	MemoryContext	tmpctx,
+					oldctx;
+	char		   *temp;
+
+	tmpctx = AllocSetContextCreate(CurrentMemoryContext,
+									  "temporary context",
+									  ALLOCSET_DEFAULT_SIZES);
+
+	oldctx = MemoryContextSwitchTo(tmpctx);
+	copy = copyObject((Node *) node);
+	sr_query_fake_const_walker(copy, NULL);
+	temp = nodeToString(copy);
+	result = hash_any((unsigned char *) temp, strlen(temp));
+	MemoryContextSwitchTo(oldctx);
+	MemoryContextDelete(tmpctx);
+
+	return result;
 }
 
 static const struct config_enum_entry log_usage_options[] = {
@@ -564,158 +689,6 @@ Datum
 _p(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
-}
-
-Datum
-sr_plan_invalid_table(PG_FUNCTION_ARGS)
-{
-	FunctionCallInfoData fcinfo_new;
-	ReturnSetInfo rsinfo;
-	FmgrInfo	flinfo;
-	ExprContext econtext;
-	TupleTableSlot *slot = NULL;
-	Relation sr_plans_heap;
-	Oid sr_plans_oid;
-	HeapScanDesc heapScan;
-	Jsonb *jsonb;
-	JsonbValue relation_key;
-
-	econtext.ecxt_per_query_memory = CurrentMemoryContext;
-
-	if (!CALLED_AS_EVENT_TRIGGER(fcinfo))  /* internal error */
-		elog(ERROR, "not fired by event trigger manager");
-
-	sr_plans_oid = sr_get_relname_oid(InvalidOid, SR_PLANS_TABLE_NAME);
-	if(sr_plans_oid == InvalidOid)
-	{
-		elog(ERROR, "Cannot find %s table", SR_PLANS_TABLE_NAME);
-	}
-	sr_plans_heap = heap_open(sr_plans_oid, RowExclusiveLock);
-
-	relation_key.type = jbvString;
-	relation_key.val.string.len = strlen("relationOids");
-	relation_key.val.string.val = "relationOids";
-
-	rsinfo.type = T_ReturnSetInfo;
-	rsinfo.econtext = &econtext;
-	rsinfo.allowedModes = (int) (SFRM_ValuePerCall | SFRM_Materialize);
-	/* note we do not set SFRM_Materialize_Random or _Preferred */
-	rsinfo.returnMode = SFRM_Materialize;
-	/* isDone is filled below */
-	rsinfo.setResult = NULL;
-	rsinfo.setDesc = NULL;
-
-	if (!dropped_objects_func)
-	{
-		Oid args[1];
-		dropped_objects_func = LookupFuncName(list_make1(makeString("pg_event_trigger_dropped_objects")), 0, args, true);
-	}
-
-	/* Look up the function */
-	fmgr_info(dropped_objects_func, &flinfo);
-
-	InitFunctionCallInfoData(fcinfo_new, &flinfo, 0, InvalidOid, NULL, (fmNodePtr)&rsinfo);
-	(*pg_event_trigger_dropped_objects) (&fcinfo_new);
-
-	/* Check for null result, since caller is clearly not expecting one */
-	if (fcinfo_new.isnull)
-		elog(ERROR, "function %p returned NULL", (void *) pg_event_trigger_dropped_objects);
-
-	slot = MakeTupleTableSlotCompat();
-	ExecSetSlotDescriptor(slot, rsinfo.setDesc);
-
-	while (tuplestore_gettupleslot(rsinfo.setResult, true, false, slot))
-	{
-		Datum		search_values[6];
-		bool		search_nulls[6];
-		bool		search_replaces[6];
-
-		HeapTuple local_tuple;
-
-		bool isnull = false;
-		bool find_plan = false;
-		int droped_relation_oid = DatumGetInt32(slot_getattr(slot, 2, &isnull));
-		char *type_name = TextDatumGetCString(slot_getattr(slot, 7, &isnull));
-
-		heapScan = heap_beginscan(sr_plans_heap, SnapshotSelf, 0, (ScanKey) NULL);
-
-		while ((local_tuple = heap_getnext(heapScan, ForwardScanDirection)) != NULL)
-		{
-			heap_deform_tuple(local_tuple, sr_plans_heap->rd_att,
-							  search_values, search_nulls);
-
-			if (DatumGetBool(search_values[5])) {
-				int type;
-				JsonbValue v;
-				JsonbIterator *it;
-				JsonbValue *node_relation;
-				HeapTuple newtuple;
-
-				jsonb = (Jsonb *)DatumGetPointer(PG_DETOAST_DATUM(search_values[3]));
-
-				/*TODO: need move to function*/
-				if (strcmp(type_name, "table") == 0)
-				{
-					node_relation = findJsonbValueFromContainer(&jsonb->root,
-												JB_FOBJECT,
-												&relation_key);
-					it = JsonbIteratorInit(node_relation->val.binary.data);
-					while ((type = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
-					{
-						if (type == WJB_ELEM)
-						{
-							int oid = DatumGetInt32(DirectFunctionCall1(numeric_int4, NumericGetDatum(v.val.numeric)));
-							if (oid == droped_relation_oid)
-							{
-								find_plan = true;
-								break;
-							}
-						}
-					}
-				}
-				else if (strcmp(type_name, "index") == 0)
-				{
-					it = JsonbIteratorInit(&jsonb->root);
-					while ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
-					{
-						if (type == WJB_KEY &&
-							v.type == jbvString &&
-							strncmp(v.val.string.val, "indexid", v.val.string.len) == 0)
-						{
-							type = JsonbIteratorNext(&it, &v, false);
-							if (type == WJB_DONE)
-								break;
-							if (type == WJB_VALUE)
-							{
-								int oid = DatumGetInt32(DirectFunctionCall1(numeric_int4, NumericGetDatum(v.val.numeric)));
-								if (oid == droped_relation_oid)
-								{
-									find_plan = true;
-									break;
-								}
-							}
-						}
-					}
-				}
-				if (find_plan)
-				{
-					/* update existing entry */
-					MemSet(search_replaces, 0, sizeof(search_replaces));
-
-					search_values[Anum_sr_valid - 1] = BoolGetDatum(false);
-					search_replaces[Anum_sr_valid - 1] = true;
-
-					newtuple = heap_modify_tuple(local_tuple, RelationGetDescr(sr_plans_heap),
-										 search_values, search_nulls, search_replaces);
-					simple_heap_update(sr_plans_heap, &newtuple->t_self, newtuple);
-				}
-			}
-		}
-		heap_endscan(heapScan);
-	}
-	heap_close(sr_plans_heap, RowExclusiveLock);
-
-	PG_RETURN_NULL();
 }
 
 /*

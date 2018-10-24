@@ -9,12 +9,14 @@ CREATE TABLE sr_plans (
 	query		varchar NOT NULL,
 	plan		text NOT NULL,
 	enable		boolean NOT NULL,
-	valid		boolean NOT NULL,
-	reloids		oid[]
+
+	reloids				oid[],
+	index_reloids		oid[]
 );
 
 CREATE INDEX sr_plans_query_hash_idx ON sr_plans (query_hash);
 CREATE INDEX sr_plans_query_oids ON sr_plans USING gin(reloids);
+CREATE INDEX sr_plans_query_index_oids ON sr_plans USING gin(index_reloids);
 
 CREATE FUNCTION _p(anyelement)
 RETURNS anyelement
@@ -31,16 +33,10 @@ BEGIN
 		WHERE object_type = 'table' OR object_type = 'index'
     LOOP
 		IF obj.object_type = 'table' THEN
-			EXECUTE 'DELETE FROM sr_plans WHERE reloids @> ARRAY[$1]'
-			USING obj.objid;
+			DELETE FROM @extschema@.sr_plans WHERE reloids @> ARRAY[obj.objid];
 		ELSE
 			IF obj.object_type = 'index' THEN
-				FOR indobj IN SELECT indrelid FROM pg_index
-					WHERE indexrelid = obj.objid
-				LOOP
-					EXECUTE 'DELETE FROM sr_plans WHERE reloids @> ARRAY[$1]'
-					USING indobj.indrelid;
-				END LOOP;
+				DELETE FROM @extschema@.sr_plans WHERE index_reloids @> ARRAY[obj.objid];
 			END IF;
 		END IF;
     END LOOP;

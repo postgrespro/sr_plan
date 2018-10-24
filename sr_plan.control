@@ -2,4 +2,3 @@
 comment = 'functions for save and read plan'
 default_version = '1.1'
 module_pathname = '$libdir/sr_plan'
-relocatable = true

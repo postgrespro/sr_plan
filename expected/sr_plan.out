@@ -1,75 +1,97 @@
 CREATE EXTENSION sr_plan;
+SET sr_plan.log_usage = NOTICE;
 CREATE TABLE test_table(test_attr1 int, test_attr2 int);
+INSERT INTO test_table SELECT i, i + 1 FROM generate_series(1, 20) i;
 SET sr_plan.write_mode = true;
 SELECT * FROM test_table WHERE test_attr1 = _p(10);
+NOTICE:  sr_plan: collected parameter on 44
+NOTICE:  sr_plan: saved plan for SELECT * FROM test_table WHERE test_attr1 = _p(10);
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         10 |         11
+(1 row)
+
+SELECT * FROM test_table WHERE test_attr1 = 10;
+NOTICE:  sr_plan: saved plan for SELECT * FROM test_table WHERE test_attr1 = 10;
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
 
 SELECT * FROM test_table WHERE test_attr1 = 10;
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
-
-SELECT * FROM test_table WHERE test_attr1 = 10;
- test_attr1 | test_attr2 
-------------+------------
-(0 rows)
+         10 |         11
+(1 row)
 
 SET sr_plan.write_mode = false;
 SELECT * FROM test_table WHERE test_attr1 = _p(10);
+NOTICE:  sr_plan: collected parameter on 44
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         10 |         11
+(1 row)
 
 SELECT * FROM test_table WHERE test_attr1 = 10;
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         10 |         11
+(1 row)
 
 SELECT * FROM test_table WHERE test_attr1 = 15;
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         15 |         16
+(1 row)
 
 UPDATE sr_plans SET enable = true;
 SELECT * FROM test_table WHERE test_attr1 = _p(10);
+NOTICE:  sr_plan: collected parameter on 44
+NOTICE:  sr_plan: restored parameter on 44
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM test_table WHERE test_attr1 = _p(10);
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         10 |         11
+(1 row)
 
 SELECT * FROM test_table WHERE test_attr1 = _p(15);
+NOTICE:  sr_plan: collected parameter on 44
+NOTICE:  sr_plan: restored parameter on 44
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM test_table WHERE test_attr1 = _p(15);
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         15 |         16
+(1 row)
 
 SELECT * FROM test_table WHERE test_attr1 = 10;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM test_table WHERE test_attr1 = 10;
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         10 |         11
+(1 row)
 
 SELECT * FROM test_table WHERE test_attr1 = 15;
  test_attr1 | test_attr2 
 ------------+------------
-(0 rows)
+         15 |         16
+(1 row)
 
-SELECT enable, valid, query FROM sr_plans ORDER BY length(query);
- enable | valid |                        query                        
---------+-------+-----------------------------------------------------
- t      | t     | SELECT * FROM test_table WHERE test_attr1 = 10;
- t      | t     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
+SELECT enable, query FROM sr_plans ORDER BY length(query);
+ enable |                        query                        
+--------+-----------------------------------------------------
+ t      | SELECT * FROM test_table WHERE test_attr1 = 10;
+ t      | SELECT * FROM test_table WHERE test_attr1 = _p(10);
 (2 rows)
 
 DROP TABLE test_table;
-SELECT enable, valid, query FROM sr_plans ORDER BY length(query);
- enable | valid |                        query                        
---------+-------+-----------------------------------------------------
- t      | f     | SELECT * FROM test_table WHERE test_attr1 = 10;
- t      | f     | SELECT * FROM test_table WHERE test_attr1 = _p(10);
-(2 rows)
+SELECT enable, query FROM sr_plans ORDER BY length(query);
+ enable | query 
+--------+-------
+(0 rows)
 
 CREATE TABLE test_table(test_attr1 int, test_attr2 int, test_attr3 int);
 SELECT * FROM test_table WHERE test_attr1 = _p(10);
+NOTICE:  sr_plan: collected parameter on 44
  test_attr1 | test_attr2 | test_attr3 
 ------------+------------+------------
 (0 rows)

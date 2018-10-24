@@ -20,25 +20,46 @@ SELECT * FROM test.test_table WHERE test_attr1 = 10;
 
 SET sr_plan.write_mode = false;
 UPDATE plan.sr_plans SET enable = TRUE;
-SELECT enable, valid, query FROM plan.sr_plans ORDER BY length(query);
- enable | valid |                             query                             
---------+-------+---------------------------------------------------------------
- t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = 10;
- t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+SELECT enable, query FROM plan.sr_plans ORDER BY length(query);
+ enable |                             query                             
+--------+---------------------------------------------------------------
+ t      | SELECT * FROM test.test_table WHERE test_attr1 = 10;
+ t      | SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
 (2 rows)
 
-DROP INDEX test.i1;
-SELECT enable, valid, query FROM plan.sr_plans ORDER BY length(query);
- enable | valid |                             query                             
---------+-------+---------------------------------------------------------------
- t      | f     | SELECT * FROM test.test_table WHERE test_attr1 = 10;
- t      | t     | SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+EXPLAIN (COSTS OFF) SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+              QUERY PLAN              
+--------------------------------------
+ Seq Scan on test_table
+   Filter: (test_attr1 = plan._p(10))
 (2 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM test.test_table WHERE test_attr1 = 10;
+              QUERY PLAN               
+---------------------------------------
+ Bitmap Heap Scan on test_table
+   Recheck Cond: (test_attr1 = 10)
+   ->  Bitmap Index Scan on i1
+         Index Cond: (test_attr1 = 10)
+(4 rows)
+
+DROP INDEX test.i1;
+SELECT enable, query FROM plan.sr_plans ORDER BY length(query);
+ enable |                             query                             
+--------+---------------------------------------------------------------
+ t      | SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
+(1 row)
 
 SELECT * FROM test.test_table WHERE test_attr1 = plan._p(10);
  test_attr1 | test_attr2 
 ------------+------------
          10 |         11
+(1 row)
+
+SELECT * FROM test.test_table WHERE test_attr1 = plan._p(20);
+ test_attr1 | test_attr2 
+------------+------------
+         20 |         21
 (1 row)
 
 SELECT * FROM test.test_table WHERE test_attr1 = 10;

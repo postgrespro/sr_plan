@@ -1,4 +1,6 @@
 [![Build Status](https://travis-ci.org/postgrespro/sr_plan.svg?branch=master)](https://travis-ci.org/postgrespro/sr_plan)
+[![GitHub license](https://img.shields.io/badge/license-PostgreSQL-blue.svg)](https://raw.githubusercontent.com/postgrespro/sr_plan/master/LICENSE)
+
 
 # Save and restore query plans in PostgreSQL
 

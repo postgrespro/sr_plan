@@ -1286,3 +1286,4 @@ DROP TABLE nt2 CASCADE;
 NOTICE:  drop cascades to constraint nt3_nt2_id_fkey on table nt3
 DROP TABLE nt3 CASCADE;
 DROP EXTENSION sr_plan CASCADE;
+NOTICE:  sr_plan was disabled

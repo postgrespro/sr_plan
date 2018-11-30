@@ -124,7 +124,7 @@ init_sr_plan(void)
  * Check if 'stmt' is ALTER EXTENSION sr_plan
  */
 static bool
-xact_is_alter_extension_stmt(Node *stmt)
+is_alter_extension_cmd(Node *stmt)
 {
 	if (!stmt)
 		return false;
@@ -139,7 +139,7 @@ xact_is_alter_extension_stmt(Node *stmt)
 }
 
 static bool
-xact_is_drop_extension_stmt(Node *stmt)
+is_drop_extension_stmt(Node *stmt)
 {
 	DropStmt	*ds = (DropStmt *) stmt;
 
@@ -150,7 +150,7 @@ xact_is_drop_extension_stmt(Node *stmt)
 		return false;
 
 	if (ds->removeType == OBJECT_EXTENSION &&
-			pg_strcasecmp(strVal(linitial(ds->objects)), "sr_plan"))
+			pg_strcasecmp(strVal(linitial(ds->objects)), "sr_plan") == 0)
 		return true;
 
 	return false;
@@ -171,15 +171,15 @@ sr_analyze(ParseState *pstate, Query *query)
 	if (query->commandType == CMD_UTILITY)
 	{
 		/* ... ALTER EXTENSION sr_plan */
-		if (xact_is_alter_extension_stmt(query->utilityStmt))
+		if (is_alter_extension_cmd(query->utilityStmt))
 			invalidate_oids();
 
 		/* ... DROP EXTENSION sr_plan */
-		if (xact_is_drop_extension_stmt(query->utilityStmt))
+		if (is_drop_extension_stmt(query->utilityStmt))
 		{
 			invalidate_oids();
 			cachedInfo.enabled = false;
-			elog(NOTICE, "sr_plan hooks were disabled");
+			elog(NOTICE, "sr_plan was disabled");
 		}
 	}
 }

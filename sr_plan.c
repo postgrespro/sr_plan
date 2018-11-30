@@ -24,10 +24,26 @@ void _PG_fini(void);
 
 static planner_hook_type srplan_planner_hook_next = NULL;
 post_parse_analyze_hook_type srplan_post_parse_analyze_hook_next = NULL;
-static bool sr_plan_write_mode = false;
-static int sr_plan_log_usage = 0;
 
-static Oid sr_plan_fake_func = 0;
+typedef struct SrPlanCachedInfo {
+	bool write_mode;
+	int log_usage;
+	Oid fake_func;
+	Oid schema_oid;
+	Oid sr_plans_reloid;
+	Oid sr_index_oid;
+	bool enabled;
+} SrPlanCachedInfo;
+
+static SrPlanCachedInfo cachedInfo = {
+	false,			/* write_mode */
+	0,				/* log_usage */
+	0,				/* fake_func */
+	InvalidOid,		/* schema_oid */
+	InvalidOid,		/* sr_plans_reloid */
+	InvalidOid,		/* sr_plans_index_oid */
+	false			/* enabled */
+};
 
 static PlannedStmt *sr_planner(Query *parse, int cursorOptions,
 								ParamListInfo boundParams);
@@ -72,9 +88,44 @@ List *query_params;
 const char *query_text;
 
 static void
+invalidate_oids(void)
+{
+	cachedInfo.schema_oid = InvalidOid;
+	sr_reloid = InvalidOid;
+	sr_reloid = InvalidOid;
+}
+
+/*
+ * Check if 'stmt' is ALTER EXTENSION sr_plan
+ */
+static bool
+xact_is_alter_extension_stmt(Node *stmt)
+{
+	if (!stmt)
+		return false;
+
+	if (!IsA(stmt, AlterExtensionStmt))
+		return false;
+
+	if (pg_strcasecmp(((AlterExtensionStmt *) stmt)->extname, "sr_plan") == 0)
+		return true;
+
+	return false;
+}
+
+static void
 sr_analyze(ParseState *pstate, Query *query)
 {
 	query_text = pstate->p_sourcetext;
+
+	if (query->commandType == CMD_UTILITY)
+	{
+		/* ... ALTER EXTENSION pg_pathman */
+		if (xact_is_alter_extension_stmt(query->utilityStmt))
+		{
+			invalidate_oids();
+		}
+	}
 }
 
 /*
@@ -227,8 +278,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 					sr_index_rel;
 	HeapTuple		tuple;
 	Oid				sr_plans_oid,
-					sr_index_oid,
-					schema_oid;
+					sr_index_oid;
 	char		   *schema_name;
 	char		   *plan_text;
 	List		   *func_name_list;
@@ -251,21 +301,35 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		srplan_planner_hook_next(parse, cursorOptions, boundParams) : \
 		standard_planner(parse, cursorOptions, boundParams))
 
-	schema_oid = get_sr_plan_schema();
-	if (!OidIsValid(schema_oid))
+	if (parse->commandType != CMD_SELECT)
 	{
-		/* Just call standard_planner() if schema doesn't exist. */
+		if (parse->commandType == CMD_UTILITY)
+			cachedInfo.schema_oid = InvalidOid;
+
 		pl_stmt = call_standard_planner();
 		level--;
 		return pl_stmt;
 	}
 
-	if (sr_plan_fake_func)
+	/* Set extension Oid if needed */
+	if (cachedInfo.schema_oid == InvalidOid)
+	{
+		cachedInfo.schema_oid = get_sr_plan_schema();
+		if (!OidIsValid(cachedInfo.schema_oid))
+		{
+			/* Just call standard_planner() if schema doesn't exist. */
+			pl_stmt = call_standard_planner();
+			level--;
+			return pl_stmt;
+		}
+	}
+
+	if (cachedInfo.fake_func)
 	{
 		HeapTuple   ftup;
-		ftup = SearchSysCache1(PROCOID, ObjectIdGetDatum(sr_plan_fake_func));
+		ftup = SearchSysCache1(PROCOID, ObjectIdGetDatum(cachedInfo.fake_func));
 		if (!HeapTupleIsValid(ftup))
-			sr_plan_fake_func = 0;
+			cachedInfo.fake_func = 0;
 		else
 			ReleaseSysCache(ftup);
 	}
@@ -273,15 +337,15 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	{
 		Oid args[1] = {ANYELEMENTOID};
 
-		schema_name = get_namespace_name(schema_oid);
+		schema_name = get_namespace_name(cachedInfo.schema_oid);
 		func_name_list = list_make2(makeString(schema_name), makeString("_p")); 
-		sr_plan_fake_func = LookupFuncName(func_name_list, 1, args, true);
+		cachedInfo.fake_func = LookupFuncName(func_name_list, 1, args, true);
 		list_free(func_name_list);
 		pfree(schema_name);
 	}
 
-	sr_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_TABLE_QUERY_INDEX_NAME);
-	sr_plans_oid = sr_get_relname_oid(schema_oid, SR_PLANS_TABLE_NAME);
+	sr_index_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_TABLE_QUERY_INDEX_NAME);
+	sr_plans_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_TABLE_NAME);
 
 	if (sr_plans_oid == InvalidOid || sr_index_oid == InvalidOid)
 		elog(ERROR, "sr_plan extension installed incorrectly");
@@ -303,13 +367,13 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	if (pl_stmt != NULL)
 	{
 		level--;
-		if (sr_plan_log_usage > 0)
-			elog(sr_plan_log_usage, "sr_plan: cached plan was used for query: %s", query_text);
+		if (cachedInfo.log_usage > 0)
+			elog(cachedInfo.log_usage, "sr_plan: cached plan was used for query: %s", query_text);
 
 		goto cleanup;
 	}
 
-	if (!sr_plan_write_mode || level > 1)
+	if (!cachedInfo.write_mode || level > 1)
 	{
 		/* quick way out if not in write mode */
 		pl_stmt = call_standard_planner();
@@ -392,11 +456,11 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		int			reloids_len = list_length(pl_stmt->relationOids);
 
 		/* prepare relation for reloids index too */
-		reloids_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_RELOIDS_INDEX);
+		reloids_index_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_RELOIDS_INDEX);
 		reloids_index_rel = index_open(reloids_index_oid, heap_lock);
 
 		/* prepare relation for reloids index too */
-		index_reloids_index_oid = sr_get_relname_oid(schema_oid, SR_PLANS_INDEX_RELOIDS_INDEX);
+		index_reloids_index_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_INDEX_RELOIDS_INDEX);
 		index_reloids_index_rel = index_open(index_reloids_index_oid, heap_lock);
 
 		MemSet(nulls, 0, sizeof(nulls));
@@ -456,8 +520,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		tuple = heap_form_tuple(sr_plans_heap->rd_att, values, nulls);
 		simple_heap_insert(sr_plans_heap, tuple);
 
-		if (sr_plan_log_usage)
-			elog(sr_plan_log_usage, "sr_plan: saved plan for %s", query_text);
+		if (cachedInfo.log_usage)
+			elog(cachedInfo.log_usage, "sr_plan: saved plan for %s", query_text);
 
 		index_insert_compat(sr_index_rel,
 					 values, nulls,
@@ -527,7 +591,7 @@ sr_query_expr_walker(Node *node, void *context)
 	if (node == NULL)
 		return false;
 
-	if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
+	if (IsA(node, FuncExpr) && fexpr->funcid == cachedInfo.fake_func)
 	{
 		if (qp_context->collect)
 		{
@@ -539,8 +603,8 @@ sr_query_expr_walker(Node *node, void *context)
 			/* HACK: location could lost after planning */
 			fexpr->funccollid = fexpr->location;
 
-			if (sr_plan_log_usage)
-				elog(sr_plan_log_usage, "sr_plan: collected parameter on %d", param->location);
+			if (cachedInfo.log_usage)
+				elog(cachedInfo.log_usage, "sr_plan: collected parameter on %d", param->location);
 
 			qp_context->params = lappend(qp_context->params, param);
 		}
@@ -556,8 +620,8 @@ sr_query_expr_walker(Node *node, void *context)
 				{
 					fexpr->funccollid = param->funccollid;
 					fexpr->args->head->data.ptr_value = param->node;
-					if (sr_plan_log_usage)
-						elog(sr_plan_log_usage, "sr_plan: restored parameter on %d", param->location);
+					if (cachedInfo.log_usage)
+						elog(cachedInfo.log_usage, "sr_plan: restored parameter on %d", param->location);
 
 					break;
 				}
@@ -578,7 +642,7 @@ sr_query_fake_const_expr_walker(Node *node, void *context)
 	if (node == NULL)
 		return false;
 
-	if (IsA(node, FuncExpr) && fexpr->funcid == sr_plan_fake_func)
+	if (IsA(node, FuncExpr) && fexpr->funcid == cachedInfo.fake_func)
 	{
 		Const		   *fakeconst;
 
@@ -651,7 +715,7 @@ _PG_init(void)
 	DefineCustomBoolVariable("sr_plan.write_mode",
 							 "Save all plans for all query.",
 							 NULL,
-							 &sr_plan_write_mode,
+							 &cachedInfo.write_mode,
 							 false,
 							 PGC_SUSET,
 							 0,
@@ -662,7 +726,7 @@ _PG_init(void)
 	DefineCustomEnumVariable("sr_plan.log_usage",
 							 "Log cached plan usage with specified level",
 							 NULL,
-							 &sr_plan_log_usage,
+							 &cachedInfo.log_usage,
 							 0,
 							 log_usage_options,
 							 PGC_USERSET,

@@ -41,7 +41,7 @@ Make an example query:
 select query_hash from sr_plans where query_hash=10;
 ```
 
-Disable saving the query:
+Disable saving the plan for the query:
 ```SQL
 set sr_plan.write_mode = false;
 ```

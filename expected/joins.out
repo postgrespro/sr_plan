@@ -1,0 +1,1304 @@
+CREATE EXTENSION sr_plan;
+SET sr_plan.log_usage = NOTICE;
+CREATE TABLE test_table(test_attr1 int, test_attr2 int);
+INSERT INTO test_table SELECT i, i + 1 FROM generate_series(1, 20) i;
+SET sr_plan.write_mode = true;
+CREATE TABLE J1_TBL (i integer, j integer, t text);
+CREATE TABLE J2_TBL (i integer, k integer);
+INSERT INTO J1_TBL VALUES (1, 4, 'one');
+INSERT INTO J1_TBL VALUES (2, 3, 'two');
+INSERT INTO J1_TBL VALUES (3, 2, 'three');
+INSERT INTO J1_TBL VALUES (4, 1, 'four');
+INSERT INTO J1_TBL VALUES (5, 0, 'five');
+INSERT INTO J1_TBL VALUES (6, 6, 'six');
+INSERT INTO J1_TBL VALUES (7, 7, 'seven');
+INSERT INTO J1_TBL VALUES (8, 8, 'eight');
+INSERT INTO J1_TBL VALUES (0, NULL, 'zero');
+INSERT INTO J1_TBL VALUES (NULL, NULL, 'null');
+INSERT INTO J1_TBL VALUES (NULL, 0, 'zero');
+INSERT INTO J2_TBL VALUES (1, -1);
+INSERT INTO J2_TBL VALUES (2, 2);
+INSERT INTO J2_TBL VALUES (3, -3);
+INSERT INTO J2_TBL VALUES (2, 4);
+INSERT INTO J2_TBL VALUES (5, -5);
+INSERT INTO J2_TBL VALUES (5, -5);
+INSERT INTO J2_TBL VALUES (0, NULL);
+INSERT INTO J2_TBL VALUES (NULL, NULL);
+INSERT INTO J2_TBL VALUES (NULL, 0);
+SELECT '' AS "xxx", t1.a, t2.e
+  FROM J1_TBL t1 (a, b, c), J2_TBL t2 (d, e)
+  WHERE t1.a = t2.d;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", t1.a, t2.e
+  FROM J1_TBL t1 (a, b, c), J2_TBL t2 (d, e)
+  WHERE t1.a = t2.d;
+ xxx | a | e  
+-----+---+----
+     | 0 |   
+     | 1 | -1
+     | 2 |  2
+     | 2 |  4
+     | 3 | -3
+     | 5 | -5
+     | 5 | -5
+(7 rows)
+
+SELECT '' AS "xxx", tx.ii, tx.jj, tx.kk
+  FROM (J1_TBL t1 (a, b, c) CROSS JOIN J2_TBL t2 (d, e))
+    AS tx (ii, jj, tt, ii2, kk);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", tx.ii, tx.jj, tx.kk
+  FROM (J1_TBL t1 (a, b, c) CROSS JOIN J2_TBL t2 (d, e))
+    AS tx (ii, jj, tt, ii2, kk);
+ xxx | ii | jj | kk 
+-----+----+----+----
+     |  1 |  4 | -1
+     |  2 |  3 | -1
+     |  3 |  2 | -1
+     |  4 |  1 | -1
+     |  5 |  0 | -1
+     |  6 |  6 | -1
+     |  7 |  7 | -1
+     |  8 |  8 | -1
+     |  0 |    | -1
+     |    |    | -1
+     |    |  0 | -1
+     |  1 |  4 |  2
+     |  2 |  3 |  2
+     |  3 |  2 |  2
+     |  4 |  1 |  2
+     |  5 |  0 |  2
+     |  6 |  6 |  2
+     |  7 |  7 |  2
+     |  8 |  8 |  2
+     |  0 |    |  2
+     |    |    |  2
+     |    |  0 |  2
+     |  1 |  4 | -3
+     |  2 |  3 | -3
+     |  3 |  2 | -3
+     |  4 |  1 | -3
+     |  5 |  0 | -3
+     |  6 |  6 | -3
+     |  7 |  7 | -3
+     |  8 |  8 | -3
+     |  0 |    | -3
+     |    |    | -3
+     |    |  0 | -3
+     |  1 |  4 |  4
+     |  2 |  3 |  4
+     |  3 |  2 |  4
+     |  4 |  1 |  4
+     |  5 |  0 |  4
+     |  6 |  6 |  4
+     |  7 |  7 |  4
+     |  8 |  8 |  4
+     |  0 |    |  4
+     |    |    |  4
+     |    |  0 |  4
+     |  1 |  4 | -5
+     |  2 |  3 | -5
+     |  3 |  2 | -5
+     |  4 |  1 | -5
+     |  5 |  0 | -5
+     |  6 |  6 | -5
+     |  7 |  7 | -5
+     |  8 |  8 | -5
+     |  0 |    | -5
+     |    |    | -5
+     |    |  0 | -5
+     |  1 |  4 | -5
+     |  2 |  3 | -5
+     |  3 |  2 | -5
+     |  4 |  1 | -5
+     |  5 |  0 | -5
+     |  6 |  6 | -5
+     |  7 |  7 | -5
+     |  8 |  8 | -5
+     |  0 |    | -5
+     |    |    | -5
+     |    |  0 | -5
+     |  1 |  4 |   
+     |  2 |  3 |   
+     |  3 |  2 |   
+     |  4 |  1 |   
+     |  5 |  0 |   
+     |  6 |  6 |   
+     |  7 |  7 |   
+     |  8 |  8 |   
+     |  0 |    |   
+     |    |    |   
+     |    |  0 |   
+     |  1 |  4 |   
+     |  2 |  3 |   
+     |  3 |  2 |   
+     |  4 |  1 |   
+     |  5 |  0 |   
+     |  6 |  6 |   
+     |  7 |  7 |   
+     |  8 |  8 |   
+     |  0 |    |   
+     |    |    |   
+     |    |  0 |   
+     |  1 |  4 |  0
+     |  2 |  3 |  0
+     |  3 |  2 |  0
+     |  4 |  1 |  0
+     |  5 |  0 |  0
+     |  6 |  6 |  0
+     |  7 |  7 |  0
+     |  8 |  8 |  0
+     |  0 |    |  0
+     |    |    |  0
+     |    |  0 |  0
+(99 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL INNER JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL INNER JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+(7 rows)
+
+-- Same as above, slightly different syntax
+SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+(7 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, d) USING (a)
+  ORDER BY a, d;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, d) USING (a)
+  ORDER BY a, d;
+ xxx | a | b |   c   | d  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+(7 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, b) USING (b)
+  ORDER BY b, t1.a;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, b) USING (b)
+  ORDER BY b, t1.a;
+ xxx | b | a |   c   | a 
+-----+---+---+-------+---
+     | 0 | 5 | five  |  
+     | 0 |   | zero  |  
+     | 2 | 3 | three | 2
+     | 4 | 1 | one   | 2
+(4 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) NATURAL JOIN J2_TBL t2 (d, a);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) NATURAL JOIN J2_TBL t2 (d, a);
+ xxx | a | b |  c   | d 
+-----+---+---+------+---
+     | 0 |   | zero |  
+     | 2 | 3 | two  | 2
+     | 4 | 1 | four | 2
+(3 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i = J2_TBL.k);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i = J2_TBL.k);
+ xxx | i | j |  t   | i | k 
+-----+---+---+------+---+---
+     | 0 |   | zero |   | 0
+     | 2 | 3 | two  | 2 | 2
+     | 4 | 1 | four | 2 | 4
+(3 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   | null  |   
+     |   | 0 | zero  |   
+(13 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   | null  |   
+     |   | 0 | zero  |   
+(13 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT OUTER JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT OUTER JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     |   |   |       |   
+     |   |   |       |  0
+(9 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     |   |   |       |   
+     |   |   |       |  0
+(9 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL FULL OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL FULL OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   |       |  0
+     |   |   | null  |   
+     |   | 0 | zero  |   
+     |   |   |       |   
+(15 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL FULL JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL FULL JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   |       |  0
+     |   |   | null  |   
+     |   | 0 | zero  |   
+     |   |   |       |   
+(15 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (k = 1);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (k = 1);
+ xxx | i | j | t | k 
+-----+---+---+---+---
+(0 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
+NOTICE:  sr_plan: saved plan for SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
+ xxx | i | j |  t  | k  
+-----+---+---+-----+----
+     | 1 | 4 | one | -1
+(1 row)
+
+--
+-- More complicated constructs
+--
+--
+-- Multiway full join
+--
+CREATE TABLE t1 (name TEXT, n INTEGER);
+CREATE TABLE t2 (name TEXT, n INTEGER);
+CREATE TABLE t3 (name TEXT, n INTEGER);
+INSERT INTO t1 VALUES ( 'bb', 11 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t1 VALUES ( 'bb', 11 );
+INSERT INTO t2 VALUES ( 'bb', 12 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t2 VALUES ( 'bb', 12 );
+INSERT INTO t2 VALUES ( 'cc', 22 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t2 VALUES ( 'cc', 22 );
+INSERT INTO t2 VALUES ( 'ee', 42 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t2 VALUES ( 'ee', 42 );
+INSERT INTO t3 VALUES ( 'bb', 13 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t3 VALUES ( 'bb', 13 );
+INSERT INTO t3 VALUES ( 'cc', 23 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t3 VALUES ( 'cc', 23 );
+INSERT INTO t3 VALUES ( 'dd', 33 );
+NOTICE:  sr_plan: saved plan for INSERT INTO t3 VALUES ( 'dd', 33 );
+SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name);
+NOTICE:  sr_plan: saved plan for SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name);
+ name | n  | n  | n  
+------+----+----+----
+ bb   | 11 | 12 | 13
+ cc   |    | 22 | 23
+ dd   |    |    | 33
+ ee   |    | 42 |   
+(4 rows)
+
+--
+-- Test interactions of join syntax and subqueries
+--
+-- Basic cases (we expect planner to pull up the subquery here)
+SELECT * FROM
+(SELECT * FROM t2) as s2
+INNER JOIN
+(SELECT * FROM t3) s3
+USING (name);
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT * FROM t2) as s2
+INNER JOIN
+(SELECT * FROM t3) s3
+USING (name);
+ name | n  | n  
+------+----+----
+ bb   | 12 | 13
+ cc   | 22 | 23
+(2 rows)
+
+SELECT * FROM
+(SELECT * FROM t2) as s2
+LEFT JOIN
+(SELECT * FROM t3) s3
+USING (name);
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT * FROM t2) as s2
+LEFT JOIN
+(SELECT * FROM t3) s3
+USING (name);
+ name | n  | n  
+------+----+----
+ bb   | 12 | 13
+ cc   | 22 | 23
+ ee   | 42 |   
+(3 rows)
+
+SELECT * FROM
+(SELECT * FROM t2) as s2
+FULL JOIN
+(SELECT * FROM t3) s3
+USING (name);
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT * FROM t2) as s2
+FULL JOIN
+(SELECT * FROM t3) s3
+USING (name);
+ name | n  | n  
+------+----+----
+ bb   | 12 | 13
+ cc   | 22 | 23
+ dd   |    | 33
+ ee   | 42 |   
+(4 rows)
+
+-- Cases with non-nullable expressions in subquery results;
+-- make sure these go to null as expected
+SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------
+ bb   |   12 |    2 |   13 |    3
+ cc   |   22 |    2 |   23 |    3
+(2 rows)
+
+SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL LEFT JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL LEFT JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------
+ bb   |   12 |    2 |   13 |    3
+ cc   |   22 |    2 |   23 |    3
+ ee   |   42 |    2 |      |     
+(3 rows)
+
+SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------
+ bb   |   12 |    2 |   13 |    3
+ cc   |   22 |    2 |   23 |    3
+ dd   |      |      |   33 |    3
+ ee   |   42 |    2 |      |     
+(4 rows)
+
+SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL INNER JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL INNER JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s1_n | s1_1 | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------+------+------
+ bb   |   11 |    1 |   12 |    2 |   13 |    3
+(1 row)
+
+SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL FULL JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL FULL JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s1_n | s1_1 | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------+------+------
+ bb   |   11 |    1 |   12 |    2 |   13 |    3
+ cc   |      |      |   22 |    2 |   23 |    3
+ dd   |      |      |      |      |   33 |    3
+ ee   |      |      |   42 |    2 |      |     
+(4 rows)
+
+SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+ name | s1_n | s2_n | s3_n 
+------+------+------+------
+ bb   |   11 |   12 |   13
+ cc   |      |   22 |   23
+ dd   |      |      |   33
+ ee   |      |   42 |     
+(4 rows)
+
+SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+NOTICE:  sr_plan: saved plan for SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+ name | s1_n | s2_n | s2_2 | s3_n 
+------+------+------+------+------
+ bb   |   11 |   12 |    2 |   13
+ cc   |      |   22 |    2 |   23
+ dd   |      |      |      |   33
+ ee   |      |   42 |    2 |     
+(4 rows)
+
+create temp table nt1 (
+  id int primary key,
+  a1 boolean,
+  a2 boolean
+);
+create temp table nt2 (
+  id int primary key,
+  nt1_id int,
+  b1 boolean,
+  b2 boolean,
+  foreign key (nt1_id) references nt1(id)
+);
+create temp table nt3 (
+  id int primary key,
+  nt2_id int,
+  c1 boolean,
+  foreign key (nt2_id) references nt2(id)
+);
+insert into nt1 values (1,true,true);
+NOTICE:  sr_plan: saved plan for insert into nt1 values (1,true,true);
+insert into nt1 values (2,true,false);
+NOTICE:  sr_plan: saved plan for insert into nt1 values (2,true,false);
+insert into nt1 values (3,false,false);
+NOTICE:  sr_plan: saved plan for insert into nt1 values (3,false,false);
+insert into nt2 values (1,1,true,true);
+NOTICE:  sr_plan: saved plan for insert into nt2 values (1,1,true,true);
+NOTICE:  sr_plan: saved plan for SELECT 1 FROM ONLY "pg_temp_3"."nt1" x WHERE "id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
+insert into nt2 values (2,2,true,false);
+NOTICE:  sr_plan: saved plan for insert into nt2 values (2,2,true,false);
+NOTICE:  sr_plan: saved plan for insert into nt2 values (2,2,true,false);
+insert into nt2 values (3,3,false,false);
+NOTICE:  sr_plan: saved plan for insert into nt2 values (3,3,false,false);
+NOTICE:  sr_plan: saved plan for insert into nt2 values (3,3,false,false);
+insert into nt3 values (1,1,true);
+NOTICE:  sr_plan: saved plan for insert into nt3 values (1,1,true);
+NOTICE:  sr_plan: saved plan for SELECT 1 FROM ONLY "pg_temp_3"."nt2" x WHERE "id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
+insert into nt3 values (2,2,false);
+NOTICE:  sr_plan: saved plan for insert into nt3 values (2,2,false);
+NOTICE:  sr_plan: saved plan for insert into nt3 values (2,2,false);
+insert into nt3 values (3,3,true);
+NOTICE:  sr_plan: saved plan for insert into nt3 values (3,3,true);
+NOTICE:  sr_plan: saved plan for insert into nt3 values (3,3,true);
+explain (costs off)
+select nt3.id
+from nt3 as nt3
+  left join
+    (select nt2.*, (nt2.b1 and ss1.a3) AS b3
+     from nt2 as nt2
+       left join
+         (select nt1.*, (nt1.id is not null) as a3 from nt1) as ss1
+         on ss1.id = nt2.nt1_id
+    ) as ss2
+    on ss2.id = nt3.nt2_id
+where nt3.id = 1 and ss2.b3;
+NOTICE:  sr_plan: saved plan for explain (costs off)
+select nt3.id
+from nt3 as nt3
+  left join
+    (select nt2.*, (nt2.b1 and ss1.a3) AS b3
+     from nt2 as nt2
+       left join
+         (select nt1.*, (nt1.id is not null) as a3 from nt1) as ss1
+         on ss1.id = nt2.nt1_id
+    ) as ss2
+    on ss2.id = nt3.nt2_id
+where nt3.id = 1 and ss2.b3;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Nested Loop
+   ->  Nested Loop
+         ->  Index Scan using nt3_pkey on nt3
+               Index Cond: (id = 1)
+         ->  Index Scan using nt2_pkey on nt2
+               Index Cond: (id = nt3.nt2_id)
+   ->  Index Only Scan using nt1_pkey on nt1
+         Index Cond: (id = nt2.nt1_id)
+         Filter: (nt2.b1 AND (id IS NOT NULL))
+(9 rows)
+
+select nt3.id
+from nt3 as nt3
+  left join
+    (select nt2.*, (nt2.b1 and ss1.a3) AS b3
+     from nt2 as nt2
+       left join
+         (select nt1.*, (nt1.id is not null) as a3 from nt1) as ss1
+         on ss1.id = nt2.nt1_id
+    ) as ss2
+    on ss2.id = nt3.nt2_id
+where nt3.id = 1 and ss2.b3;
+NOTICE:  sr_plan: saved plan for select nt3.id
+from nt3 as nt3
+  left join
+    (select nt2.*, (nt2.b1 and ss1.a3) AS b3
+     from nt2 as nt2
+       left join
+         (select nt1.*, (nt1.id is not null) as a3 from nt1) as ss1
+         on ss1.id = nt2.nt1_id
+    ) as ss2
+    on ss2.id = nt3.nt2_id
+where nt3.id = 1 and ss2.b3;
+ id 
+----
+  1
+(1 row)
+
+SET sr_plan.write_mode = false;
+UPDATE sr_plans SET enable = true;
+SELECT '' AS "xxx", t1.a, t2.e
+  FROM J1_TBL t1 (a, b, c), J2_TBL t2 (d, e)
+  WHERE t1.a = t2.d;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", t1.a, t2.e
+  FROM J1_TBL t1 (a, b, c), J2_TBL t2 (d, e)
+  WHERE t1.a = t2.d;
+ xxx | a | e  
+-----+---+----
+     | 0 |   
+     | 1 | -1
+     | 2 |  2
+     | 2 |  4
+     | 3 | -3
+     | 5 | -5
+     | 5 | -5
+(7 rows)
+
+SELECT '' AS "xxx", tx.ii, tx.jj, tx.kk
+  FROM (J1_TBL t1 (a, b, c) CROSS JOIN J2_TBL t2 (d, e))
+    AS tx (ii, jj, tt, ii2, kk);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", tx.ii, tx.jj, tx.kk
+  FROM (J1_TBL t1 (a, b, c) CROSS JOIN J2_TBL t2 (d, e))
+    AS tx (ii, jj, tt, ii2, kk);
+ xxx | ii | jj | kk 
+-----+----+----+----
+     |  1 |  4 | -1
+     |  2 |  3 | -1
+     |  3 |  2 | -1
+     |  4 |  1 | -1
+     |  5 |  0 | -1
+     |  6 |  6 | -1
+     |  7 |  7 | -1
+     |  8 |  8 | -1
+     |  0 |    | -1
+     |    |    | -1
+     |    |  0 | -1
+     |  1 |  4 |  2
+     |  2 |  3 |  2
+     |  3 |  2 |  2
+     |  4 |  1 |  2
+     |  5 |  0 |  2
+     |  6 |  6 |  2
+     |  7 |  7 |  2
+     |  8 |  8 |  2
+     |  0 |    |  2
+     |    |    |  2
+     |    |  0 |  2
+     |  1 |  4 | -3
+     |  2 |  3 | -3
+     |  3 |  2 | -3
+     |  4 |  1 | -3
+     |  5 |  0 | -3
+     |  6 |  6 | -3
+     |  7 |  7 | -3
+     |  8 |  8 | -3
+     |  0 |    | -3
+     |    |    | -3
+     |    |  0 | -3
+     |  1 |  4 |  4
+     |  2 |  3 |  4
+     |  3 |  2 |  4
+     |  4 |  1 |  4
+     |  5 |  0 |  4
+     |  6 |  6 |  4
+     |  7 |  7 |  4
+     |  8 |  8 |  4
+     |  0 |    |  4
+     |    |    |  4
+     |    |  0 |  4
+     |  1 |  4 | -5
+     |  2 |  3 | -5
+     |  3 |  2 | -5
+     |  4 |  1 | -5
+     |  5 |  0 | -5
+     |  6 |  6 | -5
+     |  7 |  7 | -5
+     |  8 |  8 | -5
+     |  0 |    | -5
+     |    |    | -5
+     |    |  0 | -5
+     |  1 |  4 | -5
+     |  2 |  3 | -5
+     |  3 |  2 | -5
+     |  4 |  1 | -5
+     |  5 |  0 | -5
+     |  6 |  6 | -5
+     |  7 |  7 | -5
+     |  8 |  8 | -5
+     |  0 |    | -5
+     |    |    | -5
+     |    |  0 | -5
+     |  1 |  4 |   
+     |  2 |  3 |   
+     |  3 |  2 |   
+     |  4 |  1 |   
+     |  5 |  0 |   
+     |  6 |  6 |   
+     |  7 |  7 |   
+     |  8 |  8 |   
+     |  0 |    |   
+     |    |    |   
+     |    |  0 |   
+     |  1 |  4 |   
+     |  2 |  3 |   
+     |  3 |  2 |   
+     |  4 |  1 |   
+     |  5 |  0 |   
+     |  6 |  6 |   
+     |  7 |  7 |   
+     |  8 |  8 |   
+     |  0 |    |   
+     |    |    |   
+     |    |  0 |   
+     |  1 |  4 |  0
+     |  2 |  3 |  0
+     |  3 |  2 |  0
+     |  4 |  1 |  0
+     |  5 |  0 |  0
+     |  6 |  6 |  0
+     |  7 |  7 |  0
+     |  8 |  8 |  0
+     |  0 |    |  0
+     |    |    |  0
+     |    |  0 |  0
+(99 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL INNER JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL INNER JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+(7 rows)
+
+-- Same as above, slightly different syntax
+SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+(7 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, d) USING (a)
+  ORDER BY a, d;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, d) USING (a)
+  ORDER BY a, d;
+ xxx | a | b |   c   | d  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+(7 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, b) USING (b)
+  ORDER BY b, t1.a;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, b) USING (b)
+  ORDER BY b, t1.a;
+ xxx | b | a |   c   | a 
+-----+---+---+-------+---
+     | 0 | 5 | five  |  
+     | 0 |   | zero  |  
+     | 2 | 3 | three | 2
+     | 4 | 1 | one   | 2
+(4 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) NATURAL JOIN J2_TBL t2 (d, a);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) NATURAL JOIN J2_TBL t2 (d, a);
+ xxx | a | b |  c   | d 
+-----+---+---+------+---
+     | 0 |   | zero |  
+     | 2 | 3 | two  | 2
+     | 4 | 1 | four | 2
+(3 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i = J2_TBL.k);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i = J2_TBL.k);
+ xxx | i | j |  t   | i | k 
+-----+---+---+------+---+---
+     | 0 |   | zero |   | 0
+     | 2 | 3 | two  | 2 | 2
+     | 4 | 1 | four | 2 | 4
+(3 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   | null  |   
+     |   | 0 | zero  |   
+(13 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   | null  |   
+     |   | 0 | zero  |   
+(13 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT OUTER JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT OUTER JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     |   |   |       |   
+     |   |   |       |  0
+(9 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT JOIN J2_TBL USING (i);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL RIGHT JOIN J2_TBL USING (i);
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     |   |   |       |   
+     |   |   |       |  0
+(9 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL FULL OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL FULL OUTER JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   |       |  0
+     |   |   | null  |   
+     |   | 0 | zero  |   
+     |   |   |       |   
+(15 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL FULL JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL FULL JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ xxx | i | j |   t   | k  
+-----+---+---+-------+----
+     | 0 |   | zero  |   
+     | 1 | 4 | one   | -1
+     | 2 | 3 | two   |  2
+     | 2 | 3 | two   |  4
+     | 3 | 2 | three | -3
+     | 4 | 1 | four  |   
+     | 5 | 0 | five  | -5
+     | 5 | 0 | five  | -5
+     | 6 | 6 | six   |   
+     | 7 | 7 | seven |   
+     | 8 | 8 | eight |   
+     |   |   |       |  0
+     |   |   | null  |   
+     |   | 0 | zero  |   
+     |   |   |       |   
+(15 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (k = 1);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (k = 1);
+ xxx | i | j | t | k 
+-----+---+---+---+---
+(0 rows)
+
+SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
+NOTICE:  sr_plan: cached plan was used for query: SELECT '' AS "xxx", *
+  FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
+ xxx | i | j |  t  | k  
+-----+---+---+-----+----
+     | 1 | 4 | one | -1
+(1 row)
+
+SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name);
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name);
+ name | n  | n  | n  
+------+----+----+----
+ bb   | 11 | 12 | 13
+ cc   |    | 22 | 23
+ dd   |    |    | 33
+ ee   |    | 42 |   
+(4 rows)
+
+--
+-- Test interactions of join syntax and subqueries
+--
+-- Basic cases (we expect planner to pull up the subquery here)
+SELECT * FROM
+(SELECT * FROM t2) as s2
+INNER JOIN
+(SELECT * FROM t3) s3
+USING (name);
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT * FROM t2) as s2
+INNER JOIN
+(SELECT * FROM t3) s3
+USING (name);
+ name | n  | n  
+------+----+----
+ bb   | 12 | 13
+ cc   | 22 | 23
+(2 rows)
+
+SELECT * FROM
+(SELECT * FROM t2) as s2
+LEFT JOIN
+(SELECT * FROM t3) s3
+USING (name);
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT * FROM t2) as s2
+LEFT JOIN
+(SELECT * FROM t3) s3
+USING (name);
+ name | n  | n  
+------+----+----
+ bb   | 12 | 13
+ cc   | 22 | 23
+ ee   | 42 |   
+(3 rows)
+
+SELECT * FROM
+(SELECT * FROM t2) as s2
+FULL JOIN
+(SELECT * FROM t3) s3
+USING (name);
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT * FROM t2) as s2
+FULL JOIN
+(SELECT * FROM t3) s3
+USING (name);
+ name | n  | n  
+------+----+----
+ bb   | 12 | 13
+ cc   | 22 | 23
+ dd   |    | 33
+ ee   | 42 |   
+(4 rows)
+
+-- Cases with non-nullable expressions in subquery results;
+-- make sure these go to null as expected
+SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------
+ bb   |   12 |    2 |   13 |    3
+ cc   |   22 |    2 |   23 |    3
+(2 rows)
+
+SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL LEFT JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL LEFT JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------
+ bb   |   12 |    2 |   13 |    3
+ cc   |   22 |    2 |   23 |    3
+ ee   |   42 |    2 |      |     
+(3 rows)
+
+SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------
+ bb   |   12 |    2 |   13 |    3
+ cc   |   22 |    2 |   23 |    3
+ dd   |      |      |   33 |    3
+ ee   |   42 |    2 |      |     
+(4 rows)
+
+SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL INNER JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL INNER JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL INNER JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s1_n | s1_1 | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------+------+------
+ bb   |   11 |    1 |   12 |    2 |   13 |    3
+(1 row)
+
+SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL FULL JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s1_n, 1 as s1_1 FROM t1) as s1
+NATURAL FULL JOIN
+(SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+NATURAL FULL JOIN
+(SELECT name, n as s3_n, 3 as s3_2 FROM t3) s3;
+ name | s1_n | s1_1 | s2_n | s2_2 | s3_n | s3_2 
+------+------+------+------+------+------+------
+ bb   |   11 |    1 |   12 |    2 |   13 |    3
+ cc   |      |      |   22 |    2 |   23 |    3
+ dd   |      |      |      |      |   33 |    3
+ ee   |      |      |   42 |    2 |      |     
+(4 rows)
+
+SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+ name | s1_n | s2_n | s3_n 
+------+------+------+------
+ bb   |   11 |   12 |   13
+ cc   |      |   22 |   23
+ dd   |      |      |   33
+ ee   |      |   42 |     
+(4 rows)
+
+SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+NOTICE:  sr_plan: cached plan was used for query: SELECT * FROM
+(SELECT name, n as s1_n FROM t1) as s1
+NATURAL FULL JOIN
+  (SELECT * FROM
+    (SELECT name, n as s2_n, 2 as s2_2 FROM t2) as s2
+    NATURAL FULL JOIN
+    (SELECT name, n as s3_n FROM t3) as s3
+  ) ss2;
+ name | s1_n | s2_n | s2_2 | s3_n 
+------+------+------+------+------
+ bb   |   11 |   12 |    2 |   13
+ cc   |      |   22 |    2 |   23
+ dd   |      |      |      |   33
+ ee   |      |   42 |    2 |     
+(4 rows)
+
+select nt3.id
+from nt3 as nt3
+  left join
+    (select nt2.*, (nt2.b1 and ss1.a3) AS b3
+     from nt2 as nt2
+       left join
+         (select nt1.*, (nt1.id is not null) as a3 from nt1) as ss1
+         on ss1.id = nt2.nt1_id
+    ) as ss2
+    on ss2.id = nt3.nt2_id
+where nt3.id = 1 and ss2.b3;
+NOTICE:  sr_plan: cached plan was used for query: select nt3.id
+from nt3 as nt3
+  left join
+    (select nt2.*, (nt2.b1 and ss1.a3) AS b3
+     from nt2 as nt2
+       left join
+         (select nt1.*, (nt1.id is not null) as a3 from nt1) as ss1
+         on ss1.id = nt2.nt1_id
+    ) as ss2
+    on ss2.id = nt3.nt2_id
+where nt3.id = 1 and ss2.b3;
+ id 
+----
+  1
+(1 row)
+
+DROP TABLE J1_TBL CASCADE;
+DROP TABLE J2_TBL CASCADE;
+DROP TABLE t1 CASCADE;
+DROP TABLE t2 CASCADE;
+DROP TABLE t3 CASCADE;
+DROP TABLE nt1 CASCADE;
+NOTICE:  drop cascades to constraint nt2_nt1_id_fkey on table nt2
+DROP TABLE nt2 CASCADE;
+NOTICE:  drop cascades to constraint nt3_nt2_id_fkey on table nt3
+DROP TABLE nt3 CASCADE;
+DROP EXTENSION sr_plan CASCADE;

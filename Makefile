@@ -11,7 +11,7 @@ DATA_built = sr_plan--$(EXTVERSION).sql
 DATA = sr_plan--1.0--1.1.sql
 
 EXTRA_CLEAN = sr_plan--$(EXTVERSION).sql
-REGRESS = sr_plan sr_plan_schema
+REGRESS = sr_plan sr_plan_schema joins
 
 ifdef USE_PGXS
 ifndef PG_CONFIG

@@ -392,19 +392,12 @@ CREATE TABLE t1 (name TEXT, n INTEGER);
 CREATE TABLE t2 (name TEXT, n INTEGER);
 CREATE TABLE t3 (name TEXT, n INTEGER);
 INSERT INTO t1 VALUES ( 'bb', 11 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t1 VALUES ( 'bb', 11 );
 INSERT INTO t2 VALUES ( 'bb', 12 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t2 VALUES ( 'bb', 12 );
 INSERT INTO t2 VALUES ( 'cc', 22 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t2 VALUES ( 'cc', 22 );
 INSERT INTO t2 VALUES ( 'ee', 42 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t2 VALUES ( 'ee', 42 );
 INSERT INTO t3 VALUES ( 'bb', 13 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t3 VALUES ( 'bb', 13 );
 INSERT INTO t3 VALUES ( 'cc', 23 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t3 VALUES ( 'cc', 23 );
 INSERT INTO t3 VALUES ( 'dd', 33 );
-NOTICE:  sr_plan: saved plan for INSERT INTO t3 VALUES ( 'dd', 33 );
 SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name);
 NOTICE:  sr_plan: saved plan for SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name);
  name | n  | n  | n  
@@ -621,28 +614,19 @@ create temp table nt3 (
   foreign key (nt2_id) references nt2(id)
 );
 insert into nt1 values (1,true,true);
-NOTICE:  sr_plan: saved plan for insert into nt1 values (1,true,true);
 insert into nt1 values (2,true,false);
-NOTICE:  sr_plan: saved plan for insert into nt1 values (2,true,false);
 insert into nt1 values (3,false,false);
-NOTICE:  sr_plan: saved plan for insert into nt1 values (3,false,false);
 insert into nt2 values (1,1,true,true);
-NOTICE:  sr_plan: saved plan for insert into nt2 values (1,1,true,true);
 NOTICE:  sr_plan: saved plan for SELECT 1 FROM ONLY "pg_temp_3"."nt1" x WHERE "id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
 insert into nt2 values (2,2,true,false);
 NOTICE:  sr_plan: saved plan for insert into nt2 values (2,2,true,false);
-NOTICE:  sr_plan: saved plan for insert into nt2 values (2,2,true,false);
 insert into nt2 values (3,3,false,false);
 NOTICE:  sr_plan: saved plan for insert into nt2 values (3,3,false,false);
-NOTICE:  sr_plan: saved plan for insert into nt2 values (3,3,false,false);
 insert into nt3 values (1,1,true);
-NOTICE:  sr_plan: saved plan for insert into nt3 values (1,1,true);
 NOTICE:  sr_plan: saved plan for SELECT 1 FROM ONLY "pg_temp_3"."nt2" x WHERE "id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
 insert into nt3 values (2,2,false);
 NOTICE:  sr_plan: saved plan for insert into nt3 values (2,2,false);
-NOTICE:  sr_plan: saved plan for insert into nt3 values (2,2,false);
 insert into nt3 values (3,3,true);
-NOTICE:  sr_plan: saved plan for insert into nt3 values (3,3,true);
 NOTICE:  sr_plan: saved plan for insert into nt3 values (3,3,true);
 explain (costs off)
 select nt3.id

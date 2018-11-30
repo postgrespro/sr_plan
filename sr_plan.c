@@ -26,13 +26,13 @@ static planner_hook_type srplan_planner_hook_next = NULL;
 post_parse_analyze_hook_type srplan_post_parse_analyze_hook_next = NULL;
 
 typedef struct SrPlanCachedInfo {
-	bool write_mode;
-	int log_usage;
-	Oid fake_func;
-	Oid schema_oid;
-	Oid sr_plans_reloid;
-	Oid sr_index_oid;
-	bool enabled;
+	bool	enabled;
+	bool	write_mode;
+	int		log_usage;
+	Oid		fake_func;
+	Oid		schema_oid;
+	Oid		sr_plans_oid;
+	Oid		sr_index_oid;
 } SrPlanCachedInfo;
 
 static SrPlanCachedInfo cachedInfo = {
@@ -55,6 +55,7 @@ static Oid sr_get_relname_oid(Oid schema_oid, const char *relname);
 static bool sr_query_walker(Query *node, void *context);
 static bool sr_query_expr_walker(Node *node, void *context);
 void walker_callback(void *node);
+static void sr_plan_relcache_hook(Datum arg, Oid relid);
 
 static void plan_tree_visitor(Plan *plan,
 				  void (*visitor) (Plan *plan, void *context),
@@ -91,8 +92,32 @@ static void
 invalidate_oids(void)
 {
 	cachedInfo.schema_oid = InvalidOid;
-	sr_reloid = InvalidOid;
-	sr_reloid = InvalidOid;
+	cachedInfo.sr_plans_oid = InvalidOid;
+}
+
+static void
+init_sr_plan(void)
+{
+	static bool relcache_callback_needed = true;
+
+	cachedInfo.schema_oid = get_sr_plan_schema();
+	if (cachedInfo.schema_oid == InvalidOid)
+		return;
+
+	cachedInfo.sr_index_oid = sr_get_relname_oid(cachedInfo.schema_oid,
+										SR_PLANS_TABLE_QUERY_INDEX_NAME);
+	cachedInfo.sr_plans_oid = sr_get_relname_oid(cachedInfo.schema_oid,
+										SR_PLANS_TABLE_NAME);
+
+	if (cachedInfo.sr_plans_oid == InvalidOid ||
+			cachedInfo.sr_index_oid == InvalidOid)
+		elog(ERROR, "sr_plan extension installed incorrectly");
+
+	if (relcache_callback_needed)
+	{
+		CacheRegisterRelcacheCallback(sr_plan_relcache_hook, PointerGetDatum(NULL));
+		relcache_callback_needed = false;
+	}
 }
 
 /*
@@ -113,6 +138,31 @@ xact_is_alter_extension_stmt(Node *stmt)
 	return false;
 }
 
+static bool
+xact_is_drop_extension_stmt(Node *stmt)
+{
+	DropStmt	*ds = (DropStmt *) stmt;
+
+	if (!stmt)
+		return false;
+
+	if (!IsA(stmt, DropStmt))
+		return false;
+
+	if (ds->removeType == OBJECT_EXTENSION &&
+			pg_strcasecmp(strVal(linitial(ds->objects)), "sr_plan"))
+		return true;
+
+	return false;
+}
+
+static void
+sr_plan_relcache_hook(Datum arg, Oid relid)
+{
+	if (relid == InvalidOid || (relid == cachedInfo.sr_plans_oid))
+		invalidate_oids();
+}
+
 static void
 sr_analyze(ParseState *pstate, Query *query)
 {
@@ -120,10 +170,16 @@ sr_analyze(ParseState *pstate, Query *query)
 
 	if (query->commandType == CMD_UTILITY)
 	{
-		/* ... ALTER EXTENSION pg_pathman */
+		/* ... ALTER EXTENSION sr_plan */
 		if (xact_is_alter_extension_stmt(query->utilityStmt))
+			invalidate_oids();
+
+		/* ... DROP EXTENSION sr_plan */
+		if (xact_is_drop_extension_stmt(query->utilityStmt))
 		{
 			invalidate_oids();
+			cachedInfo.enabled = false;
+			elog(NOTICE, "sr_plan hooks were disabled");
 		}
 	}
 }
@@ -277,8 +333,6 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	Relation		sr_plans_heap,
 					sr_index_rel;
 	HeapTuple		tuple;
-	Oid				sr_plans_oid,
-					sr_index_oid;
 	char		   *schema_name;
 	char		   *plan_text;
 	List		   *func_name_list;
@@ -301,11 +355,9 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		srplan_planner_hook_next(parse, cursorOptions, boundParams) : \
 		standard_planner(parse, cursorOptions, boundParams))
 
-	if (parse->commandType != CMD_SELECT)
+	/* Only save plans for SELECT commands */
+	if (parse->commandType != CMD_SELECT || !cachedInfo.enabled)
 	{
-		if (parse->commandType == CMD_UTILITY)
-			cachedInfo.schema_oid = InvalidOid;
-
 		pl_stmt = call_standard_planner();
 		level--;
 		return pl_stmt;
@@ -313,8 +365,10 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* Set extension Oid if needed */
 	if (cachedInfo.schema_oid == InvalidOid)
+		init_sr_plan();
+
+	if (cachedInfo.schema_oid == InvalidOid)
 	{
-		cachedInfo.schema_oid = get_sr_plan_schema();
 		if (!OidIsValid(cachedInfo.schema_oid))
 		{
 			/* Just call standard_planner() if schema doesn't exist. */
@@ -344,12 +398,6 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		pfree(schema_name);
 	}
 
-	sr_index_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_TABLE_QUERY_INDEX_NAME);
-	sr_plans_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_TABLE_NAME);
-
-	if (sr_plans_oid == InvalidOid || sr_index_oid == InvalidOid)
-		elog(ERROR, "sr_plan extension installed incorrectly");
-
 	/* Make list with all _p functions and his position */
 	sr_query_walker((Query *) parse, &qp_context);
 	query_hash = get_query_hash(parse);
@@ -357,8 +405,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* Try to find already planned statement */
 	heap_lock = AccessShareLock;
-	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
-	sr_index_rel = index_open(sr_index_oid, heap_lock);
+	sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+	sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
 
 	qp_context.collect = false;
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
@@ -387,8 +435,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	heap_close(sr_plans_heap, heap_lock);
 
 	heap_lock = AccessExclusiveLock;
-	sr_plans_heap = heap_open(sr_plans_oid, heap_lock);
-	sr_index_rel = index_open(sr_index_oid, heap_lock);
+	sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+	sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
 
 	/* recheck plan in index */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
@@ -713,10 +761,21 @@ void
 _PG_init(void)
 {
 	DefineCustomBoolVariable("sr_plan.write_mode",
-							 "Save all plans for all query.",
+							 "Save all plans for all queries.",
 							 NULL,
 							 &cachedInfo.write_mode,
 							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("sr_plan.enabled",
+							 "Enable sr_plan.",
+							 NULL,
+							 &cachedInfo.enabled,
+							 true,
 							 PGC_SUSET,
 							 0,
 							 NULL,

@@ -15,6 +15,10 @@
 #include "catalog/index.h"
 #endif
 
+#if PG_VERSION_NUM >= 120000
+#include "catalog/pg_extension_d.h"
+#endif
+
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(_p);
@@ -206,10 +210,17 @@ get_sr_plan_schema(void)
 	if (ext_schema == InvalidOid)
 		return InvalidOid; /* exit if sr_plan does not exist */
 
+#if PG_VERSION_NUM >= 120000
+	ScanKeyInit(&entry[0],
+				Anum_pg_extension_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(ext_schema));
+#else
 	ScanKeyInit(&entry[0],
 				ObjectIdAttributeNumber,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(ext_schema));
+#endif
 
 	rel = heap_open(ExtensionRelationId, heap_lock);
 	scandesc = systable_beginscan(rel, ExtensionOidIndexId, true,

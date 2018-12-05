@@ -1,4 +1,5 @@
 #include "sr_plan.h"
+#include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
 #include "catalog/pg_extension.h"
@@ -32,21 +33,25 @@ post_parse_analyze_hook_type srplan_post_parse_analyze_hook_next = NULL;
 typedef struct SrPlanCachedInfo {
 	bool	enabled;
 	bool	write_mode;
+	bool	explain_query;
 	int		log_usage;
 	Oid		fake_func;
 	Oid		schema_oid;
 	Oid		sr_plans_oid;
 	Oid		sr_index_oid;
+	const char   *query_text;
 } SrPlanCachedInfo;
 
 static SrPlanCachedInfo cachedInfo = {
+	true,			/* enabled */
 	false,			/* write_mode */
+	false,			/* explain_query */
 	0,				/* log_usage */
 	0,				/* fake_func */
 	InvalidOid,		/* schema_oid */
 	InvalidOid,		/* sr_plans_reloid */
 	InvalidOid,		/* sr_plans_index_oid */
-	false			/* enabled */
+	NULL
 };
 
 static PlannedStmt *sr_planner(Query *parse, int cursorOptions,
@@ -90,7 +95,6 @@ struct IndexIds
 };
 
 List *query_params;
-const char *query_text;
 
 static void
 invalidate_oids(void)
@@ -174,13 +178,45 @@ sr_plan_relcache_hook(Datum arg, Oid relid)
 		invalidate_oids();
 }
 
+/*
+ * TODO: maybe support for EXPLAIN (cached 1)
+static void
+check_for_explain_cached(ExplainStmt *stmt)
+{
+	List		*reslist;
+	ListCell	*lc;
+
+	if (!IsA(stmt, ExplainStmt))
+		return;
+
+	reslist = NIL;
+
+	foreach(lc, stmt->options)
+	{
+		DefElem    *opt = (DefElem *) lfirst(lc);
+
+		if (strcmp(opt->defname, "cached") == 0 &&
+				strcmp(defGetString(opt), "on") == 0)
+			cachedInfo.explain_query = true;
+		else
+			reslist = lappend(reslist, opt);
+	}
+
+	stmt->options = reslist;
+}*/
+
 static void
 sr_analyze(ParseState *pstate, Query *query)
 {
-	query_text = pstate->p_sourcetext;
+	cachedInfo.query_text = pstate->p_sourcetext;
+
+	cachedInfo.explain_query = false;
 
 	if (query->commandType == CMD_UTILITY)
 	{
+		if (IsA(query->utilityStmt, ExplainStmt))
+			cachedInfo.explain_query = true;
+
 		/* ... ALTER EXTENSION sr_plan */
 		if (is_alter_extension_cmd(query->utilityStmt))
 			invalidate_oids();
@@ -374,7 +410,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		standard_planner(parse, cursorOptions, boundParams))
 
 	/* Only save plans for SELECT commands */
-	if (parse->commandType != CMD_SELECT || !cachedInfo.enabled)
+	if (parse->commandType != CMD_SELECT || !cachedInfo.enabled
+			|| cachedInfo.explain_query)
 	{
 		pl_stmt = call_standard_planner();
 		level--;
@@ -434,7 +471,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	{
 		level--;
 		if (cachedInfo.log_usage > 0)
-			elog(cachedInfo.log_usage, "sr_plan: cached plan was used for query: %s", query_text);
+			elog(cachedInfo.log_usage, "sr_plan: cached plan was used for query: %s", cachedInfo.query_text);
 
 		goto cleanup;
 	}
@@ -533,7 +570,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 		values[Anum_sr_query_hash - 1] = query_hash;
 		values[Anum_sr_plan_hash - 1] = plan_hash;
-		values[Anum_sr_query - 1] = CStringGetTextDatum(query_text);
+		values[Anum_sr_query - 1] = CStringGetTextDatum(cachedInfo.query_text);
 		values[Anum_sr_plan - 1] = CStringGetTextDatum(plan_text);
 		values[Anum_sr_enable - 1] = BoolGetDatum(false);
 		values[Anum_sr_reloids - 1] = (Datum) 0;
@@ -587,7 +624,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		simple_heap_insert(sr_plans_heap, tuple);
 
 		if (cachedInfo.log_usage)
-			elog(cachedInfo.log_usage, "sr_plan: saved plan for %s", query_text);
+			elog(cachedInfo.log_usage, "sr_plan: saved plan for %s", cachedInfo.query_text);
 
 		index_insert_compat(sr_index_rel,
 					 values, nulls,
@@ -731,7 +768,10 @@ sr_query_fake_const_walker(Node *node, void *context)
 
 	// for any node type not specially processed, do:
 	if (IsA(node, Query))
-		return query_tree_walker((Query *) node, sr_query_fake_const_walker, context, 0);
+	{
+		Query	*q = (Query *) node;
+		return query_tree_walker(q, sr_query_fake_const_walker, context, 0);
+	}
 
 	return false;
 }

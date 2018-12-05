@@ -145,6 +145,7 @@ is_alter_extension_cmd(Node *stmt)
 static bool
 is_drop_extension_stmt(Node *stmt)
 {
+	char		*objname;
 	DropStmt	*ds = (DropStmt *) stmt;
 
 	if (!stmt)
@@ -153,8 +154,14 @@ is_drop_extension_stmt(Node *stmt)
 	if (!IsA(stmt, DropStmt))
 		return false;
 
+#if PG_VERSION_NUM < 100000
+	objname = strVal(linitial(linitial(ds->objects)));
+#else
+	objname = strVal(linitial(ds->objects));
+#endif
+
 	if (ds->removeType == OBJECT_EXTENSION &&
-			pg_strcasecmp(strVal(linitial(ds->objects)), "sr_plan") == 0)
+			pg_strcasecmp(objname, "sr_plan") == 0)
 		return true;
 
 	return false;
@@ -466,8 +473,8 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	plan_hash = hash_any((unsigned char *) plan_text, strlen(plan_text));
 
 	/*
-	 * Try to find existing plan for this query and skip addding if
-	 * it already exists even it is not valid and not enabled.
+	 * Try to find existing plan for this query and skip addding it
+	 * to prevent duplicates.
 	 */
 	query_index_scan = index_beginscan(sr_plans_heap, sr_index_rel,
 									   snapshot, 1, 0);

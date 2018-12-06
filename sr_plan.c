@@ -39,6 +39,8 @@ typedef struct SrPlanCachedInfo {
 	Oid		schema_oid;
 	Oid		sr_plans_oid;
 	Oid		sr_index_oid;
+	Oid		reloids_index_oid;
+	Oid		index_reloids_index_oid;
 	const char   *query_text;
 } SrPlanCachedInfo;
 
@@ -51,6 +53,8 @@ static SrPlanCachedInfo cachedInfo = {
 	InvalidOid,		/* schema_oid */
 	InvalidOid,		/* sr_plans_reloid */
 	InvalidOid,		/* sr_plans_index_oid */
+	InvalidOid,		/* reloids_index_oid */
+	InvalidOid,		/* index_reloids_index_oid */
 	NULL
 };
 
@@ -101,11 +105,19 @@ invalidate_oids(void)
 {
 	cachedInfo.schema_oid = InvalidOid;
 	cachedInfo.sr_plans_oid = InvalidOid;
+	cachedInfo.sr_index_oid = InvalidOid;
+	cachedInfo.fake_func = InvalidOid;
+	cachedInfo.reloids_index_oid = InvalidOid;
+	cachedInfo.index_reloids_index_oid = InvalidOid;
 }
 
 static void
 init_sr_plan(void)
 {
+	char		   *schema_name;
+	List		   *func_name_list;
+
+	Oid args[1] = {ANYELEMENTOID};
 	static bool relcache_callback_needed = true;
 
 	cachedInfo.schema_oid = get_sr_plan_schema();
@@ -116,9 +128,23 @@ init_sr_plan(void)
 										SR_PLANS_TABLE_QUERY_INDEX_NAME);
 	cachedInfo.sr_plans_oid = sr_get_relname_oid(cachedInfo.schema_oid,
 										SR_PLANS_TABLE_NAME);
+	cachedInfo.reloids_index_oid = sr_get_relname_oid(cachedInfo.schema_oid,
+										SR_PLANS_RELOIDS_INDEX);
+	cachedInfo.index_reloids_index_oid = sr_get_relname_oid(cachedInfo.schema_oid,
+										SR_PLANS_INDEX_RELOIDS_INDEX);
 
 	if (cachedInfo.sr_plans_oid == InvalidOid ||
 			cachedInfo.sr_index_oid == InvalidOid)
+		elog(ERROR, "sr_plan extension installed incorrectly");
+
+	/* Initialize _p function Oid */
+	schema_name = get_namespace_name(cachedInfo.schema_oid);
+	func_name_list = list_make2(makeString(schema_name), makeString("_p"));
+	cachedInfo.fake_func = LookupFuncName(func_name_list, 1, args, true);
+	list_free(func_name_list);
+	pfree(schema_name);
+
+	if (cachedInfo.fake_func == InvalidOid)
 		elog(ERROR, "sr_plan extension installed incorrectly");
 
 	if (relcache_callback_needed)
@@ -387,9 +413,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	Relation		sr_plans_heap,
 					sr_index_rel;
 	HeapTuple		tuple;
-	char		   *schema_name;
 	char		   *plan_text;
-	List		   *func_name_list;
 	Snapshot		snapshot;
 	ScanKeyData		key;
 	bool			found;
@@ -424,33 +448,10 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	if (cachedInfo.schema_oid == InvalidOid)
 	{
-		if (!OidIsValid(cachedInfo.schema_oid))
-		{
-			/* Just call standard_planner() if schema doesn't exist. */
-			pl_stmt = call_standard_planner();
-			level--;
-			return pl_stmt;
-		}
-	}
-
-	if (cachedInfo.fake_func)
-	{
-		HeapTuple   ftup;
-		ftup = SearchSysCache1(PROCOID, ObjectIdGetDatum(cachedInfo.fake_func));
-		if (!HeapTupleIsValid(ftup))
-			cachedInfo.fake_func = 0;
-		else
-			ReleaseSysCache(ftup);
-	}
-	else
-	{
-		Oid args[1] = {ANYELEMENTOID};
-
-		schema_name = get_namespace_name(cachedInfo.schema_oid);
-		func_name_list = list_make2(makeString(schema_name), makeString("_p")); 
-		cachedInfo.fake_func = LookupFuncName(func_name_list, 1, args, true);
-		list_free(func_name_list);
-		pfree(schema_name);
+		/* Just call standard_planner() if schema doesn't exist. */
+		pl_stmt = call_standard_planner();
+		level--;
+		return pl_stmt;
 	}
 
 	/* Make list with all _p functions and his position */
@@ -546,25 +547,17 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		struct IndexIds	index_ids = {NIL};
 
 		Relation	reloids_index_rel;
-		Oid			reloids_index_oid;
-
 		Relation	index_reloids_index_rel;
-		Oid			index_reloids_index_oid;
 
 		ArrayType  *reloids = NULL;
 		ArrayType  *index_reloids = NULL;
 		Datum		values[Anum_sr_attcount];
 		bool		nulls[Anum_sr_attcount];
-
 		int			reloids_len = list_length(pl_stmt->relationOids);
 
-		/* prepare relation for reloids index too */
-		reloids_index_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_RELOIDS_INDEX);
-		reloids_index_rel = index_open(reloids_index_oid, heap_lock);
-
-		/* prepare relation for reloids index too */
-		index_reloids_index_oid = sr_get_relname_oid(cachedInfo.schema_oid, SR_PLANS_INDEX_RELOIDS_INDEX);
-		index_reloids_index_rel = index_open(index_reloids_index_oid, heap_lock);
+		/* prepare indexes */
+		reloids_index_rel = index_open(cachedInfo.reloids_index_oid, heap_lock);
+		index_reloids_index_rel = index_open(cachedInfo.index_reloids_index_oid, heap_lock);
 
 		MemSet(nulls, 0, sizeof(nulls));
 

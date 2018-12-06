@@ -1,0 +1,117 @@
+CREATE EXTENSION sr_plan;
+SET sr_plan.log_usage = NOTICE;
+CREATE TABLE explain_test(test_attr1 int, test_attr2 int);
+INSERT INTO explain_test SELECT i, i + 1 FROM generate_series(1, 20) i;
+SET sr_plan.write_mode = true;
+SELECT * FROM explain_test WHERE test_attr1 = 10;
+NOTICE:  sr_plan: saved plan for SELECT * FROM explain_test WHERE test_attr1 = 10;
+ test_attr1 | test_attr2 
+------------+------------
+         10 |         11
+(1 row)
+
+SET sr_plan.write_mode = false;
+UPDATE sr_plans SET enable = true;
+-- check show_plan
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash) FROM vars;
+                  show_plan                   
+----------------------------------------------
+ ("Seq Scan on public.explain_test")
+ ("  Output: test_attr1, test_attr2")
+ ("  Filter: (explain_test.test_attr1 = 10)")
+(3 rows)
+
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, index := 1) FROM vars;
+                  show_plan                   
+----------------------------------------------
+ ("Seq Scan on public.explain_test")
+ ("  Output: test_attr1, test_attr2")
+ ("  Filter: (explain_test.test_attr1 = 10)")
+(3 rows)
+
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, index := 2) FROM vars;
+ERROR:  could not find saved plan
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, format := 'json') FROM vars;
+                      show_plan                       
+------------------------------------------------------
+ ("[                                                 +
+   {                                                 +
+     ""Plan"": {                                     +
+       ""Node Type"": ""Seq Scan"",                  +
+       ""Parallel Aware"": false,                    +
+       ""Relation Name"": ""explain_test"",          +
+       ""Schema"": ""public"",                       +
+       ""Alias"": ""explain_test"",                  +
+       ""Output"": [""test_attr1"", ""test_attr2""], +
+       ""Filter"": ""(explain_test.test_attr1 = 10)""+
+     }                                               +
+   }                                                 +
+ ]")
+(1 row)
+
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, format := 'text') FROM vars;
+                  show_plan                   
+----------------------------------------------
+ ("Seq Scan on public.explain_test")
+ ("  Output: test_attr1, test_attr2")
+ ("  Filter: (explain_test.test_attr1 = 10)")
+(3 rows)
+
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, format := 'xml') FROM vars;
+                          show_plan                           
+--------------------------------------------------------------
+ ("<explain xmlns=""http://www.postgresql.org/2009/explain"">+
+   <Query>                                                   +
+     <Plan>                                                  +
+       <Node-Type>Seq Scan</Node-Type>                       +
+       <Parallel-Aware>false</Parallel-Aware>                +
+       <Relation-Name>explain_test</Relation-Name>           +
+       <Schema>public</Schema>                               +
+       <Alias>explain_test</Alias>                           +
+       <Output>                                              +
+         <Item>test_attr1</Item>                             +
+         <Item>test_attr2</Item>                             +
+       </Output>                                             +
+       <Filter>(explain_test.test_attr1 = 10)</Filter>       +
+     </Plan>                                                 +
+   </Query>                                                  +
+ </explain>")
+(1 row)
+
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, format := 'yaml') FROM vars;
+                    show_plan                     
+--------------------------------------------------
+ ("- Plan:                                       +
+     Node Type: ""Seq Scan""                     +
+     Parallel Aware: false                       +
+     Relation Name: ""explain_test""             +
+     Schema: ""public""                          +
+     Alias: ""explain_test""                     +
+     Output:                                     +
+       - ""test_attr1""                          +
+       - ""test_attr2""                          +
+     Filter: ""(explain_test.test_attr1 = 10)""")
+(1 row)
+
+WITH vars AS (SELECT query_hash FROM sr_plans WHERE
+	query = 'SELECT * FROM explain_test WHERE test_attr1 = 10;' LIMIT 1)
+SELECT show_plan(vars.query_hash, format := 'nonsense') FROM vars;
+ERROR:  unrecognized value for output format "nonsense"
+HINT:  supported formats: 'text', 'xml', 'json', 'yaml'
+DROP TABLE explain_test CASCADE;
+DROP EXTENSION sr_plan CASCADE;
+NOTICE:  sr_plan was disabled

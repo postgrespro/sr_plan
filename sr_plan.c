@@ -23,6 +23,7 @@
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(do_nothing);
+PG_FUNCTION_INFO_V1(show_plan);
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -397,7 +398,9 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 			char *out = TextDatumGetCString(DatumGetTextP((search_values[3])));
 			pl_stmt = stringToNode(out);
 
-			execute_for_plantree(pl_stmt, restore_params, context);
+			if (context)
+				execute_for_plantree(pl_stmt, restore_params, context);
+
 			break;
 		}
 	}
@@ -862,6 +865,59 @@ Datum
 do_nothing(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+}
+
+Datum
+show_plan(PG_FUNCTION_ARGS)
+{
+	PlannedStmt	   *pl_stmt = NULL;
+	LOCKMODE		heap_lock =  AccessShareLock;
+	Relation		sr_plans_heap,
+					sr_index_rel;
+	Snapshot		snapshot;
+	ScanKeyData		key;
+
+	ExplainFormat	format = EXPLAIN_FORMAT_TEXT;
+	ExplainState	state;
+	uint32	index,
+			query_hash = PG_GETARG_INT32(0);
+
+	if (!PG_ARGISNULL(1))
+		index = PG_GETARG_INT32(0);
+	else
+		index = 1;
+
+	if (!PG_ARGISNULL(2))
+	{
+		char	*ftext = PG_GETARG_CSTRING(2);
+
+		if (strcmp(ftext, "text") == 0)
+			format = EXPLAIN_FORMAT_TEXT;
+		else if (strcmp(ftext, "xml") == 0)
+			format = EXPLAIN_FORMAT_XML;
+		else if (strcmp(ftext, "json") == 0)
+			format = EXPLAIN_FORMAT_JSON;
+		else if (strcmp(ftext, "yaml") == 0)
+			format = EXPLAIN_FORMAT_YAML;
+		else
+			elog(ERROR, "unknown format of EXPLAIN");
+	}
+	state.format = format;
+
+	/* Try to find already planned statement */
+	sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+	sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
+
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	ScanKeyInit(&key, 1, BTEqualStrategyNumber, F_INT4EQ, query_hash);
+	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
+										&key, NULL);
+	if (pl_stmt == NULL)
+		elog(ERROR, "no saved plan on this query hash");
+
+	UnregisterSnapshot(snapshot);
+	index_close(sr_index_rel, heap_lock);
+	heap_close(sr_plans_heap, heap_lock);
 }
 
 /*

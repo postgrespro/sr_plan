@@ -45,6 +45,11 @@ typedef struct SrPlanCachedInfo {
 	const char   *query_text;
 } SrPlanCachedInfo;
 
+typedef struct show_plan_funcctx {
+	uint32	query_hash;
+	int		index;
+} show_plan_funcctx;
+
 static SrPlanCachedInfo cachedInfo = {
 	true,			/* enabled */
 	false,			/* write_mode */
@@ -375,8 +380,12 @@ collect_indexid(void *context, Plan *plan)
 
 static PlannedStmt *
 lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
-							Relation sr_plans_heap, ScanKey key, void *context)
+							Relation sr_plans_heap, ScanKey key,
+							void *context,
+							int index,
+							char **queryString)
 {
+	int				counter = 0;
 	PlannedStmt	   *pl_stmt = NULL;
 	HeapTuple		htup;
 	IndexScanDesc	query_index_scan;
@@ -392,11 +401,17 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 		heap_deform_tuple(htup, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
 
-		/* Check enabled field */
-		if (DatumGetBool(search_values[Anum_sr_enable - 1]))
+		/* Check enabled field or index */
+		counter++;
+		if ((index > 0 && index == counter) ||
+				(index == 0 && DatumGetBool(search_values[Anum_sr_enable - 1])))
 		{
-			char *out = TextDatumGetCString(DatumGetTextP((search_values[3])));
+			char *out = TextDatumGetCString(DatumGetTextP((search_values[Anum_sr_plan - 1])));
 			pl_stmt = stringToNode(out);
+
+			if (queryString)
+				*queryString = TextDatumGetCString(
+						DatumGetTextP((search_values[Anum_sr_query - 1])));
 
 			if (context)
 				execute_for_plantree(pl_stmt, restore_params, context);
@@ -470,7 +485,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	qp_context.collect = false;
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
-										&key, &qp_context);
+										&key, &qp_context, 0, NULL);
 	if (pl_stmt != NULL)
 	{
 		level--;
@@ -500,7 +515,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	/* recheck plan in index */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
-										&key, &qp_context);
+										&key, &qp_context, 0, NULL);
 	if (pl_stmt != NULL)
 	{
 		level--;
@@ -870,54 +885,92 @@ do_nothing(PG_FUNCTION_ARGS)
 Datum
 show_plan(PG_FUNCTION_ARGS)
 {
+	FuncCallContext *funcctx;
+	show_plan_funcctx	*ctx;
+
 	PlannedStmt	   *pl_stmt = NULL;
 	LOCKMODE		heap_lock =  AccessShareLock;
 	Relation		sr_plans_heap,
 					sr_index_rel;
 	Snapshot		snapshot;
 	ScanKeyData		key;
-
-	ExplainFormat	format = EXPLAIN_FORMAT_TEXT;
-	ExplainState	state;
-	uint32	index,
+	char		   *queryString;
+	ExplainState   *es = NewExplainState();
+	uint32	index = 1,
 			query_hash = PG_GETARG_INT32(0);
 
-	if (!PG_ARGISNULL(1))
-		index = PG_GETARG_INT32(0);
-	else
-		index = 1;
-
-	if (!PG_ARGISNULL(2))
+	if (SRF_IS_FIRSTCALL())
 	{
-		char	*ftext = PG_GETARG_CSTRING(2);
+		funcctx = SRF_FIRSTCALL_INIT();
+		funcctx->user_fctx = MemoryContextAlloc(funcctx->multi_call_memory_ctx,
+				sizeof(show_plan_funcctx));
 
-		if (strcmp(ftext, "text") == 0)
-			format = EXPLAIN_FORMAT_TEXT;
-		else if (strcmp(ftext, "xml") == 0)
-			format = EXPLAIN_FORMAT_XML;
-		else if (strcmp(ftext, "json") == 0)
-			format = EXPLAIN_FORMAT_JSON;
-		else if (strcmp(ftext, "yaml") == 0)
-			format = EXPLAIN_FORMAT_YAML;
+		uint32	index = 1,
+				query_hash = PG_GETARG_INT32(0);
+
+		if (!PG_ARGISNULL(1))
+			index = PG_GETARG_INT32(1);
+
+		es->analyze = false;
+		es->costs = false;
+		es->verbose = true;
+		es->buffers = false;
+		es->timing = false;
+		es->summary = false;
+
+		/* emit opening boilerplate */
+		ExplainBeginOutput(es);
+
+		if (!PG_ARGISNULL(2))
+		{
+			char	*p = PG_GETARG_CSTRING(2);
+
+			/* default */
+			es->format = EXPLAIN_FORMAT_TEXT;
+
+			if (strcmp(p, "text") == 0)
+				es->format = EXPLAIN_FORMAT_TEXT;
+			else if (strcmp(p, "xml") == 0)
+				es->format = EXPLAIN_FORMAT_XML;
+			else if (strcmp(p, "json") == 0)
+				es->format = EXPLAIN_FORMAT_JSON;
+			else if (strcmp(p, "yaml") == 0)
+				es->format = EXPLAIN_FORMAT_YAML;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("unrecognized value for EXPLAIN option \"%s\"", p)));
+		}
+
+		/* Try to find already planned statement */
+		sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+		sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
+
+		snapshot = RegisterSnapshot(GetLatestSnapshot());
+		ScanKeyInit(&key, 1, BTEqualStrategyNumber, F_INT4EQ, query_hash);
+		pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
+											&key, NULL, index, &queryString);
+		if (pl_stmt == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("no saved plan by query hash \"%d\"", query_hash)));
+
+		ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL, NULL);
+
+		ExplainEndOutput(es);
+		Assert(es->indent == 0);
+
+		UnregisterSnapshot(snapshot);
+		index_close(sr_index_rel, heap_lock);
+		heap_close(sr_plans_heap, heap_lock);
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			do_text_output_multiline(tstate, es->str->data);
 		else
-			elog(ERROR, "unknown format of EXPLAIN");
+			do_text_output_oneline(tstate, es->str->data);
 	}
-	state.format = format;
 
-	/* Try to find already planned statement */
-	sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
-	sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
-
-	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	ScanKeyInit(&key, 1, BTEqualStrategyNumber, F_INT4EQ, query_hash);
-	pl_stmt = lookup_plan_by_query_hash(snapshot, sr_index_rel, sr_plans_heap,
-										&key, NULL);
-	if (pl_stmt == NULL)
-		elog(ERROR, "no saved plan on this query hash");
-
-	UnregisterSnapshot(snapshot);
-	index_close(sr_index_rel, heap_lock);
-	heap_close(sr_plans_heap, heap_lock);
+	funcctx = SRF_PERCALL_SETUP();
 }
 
 /*

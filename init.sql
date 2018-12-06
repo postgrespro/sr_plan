@@ -23,6 +23,13 @@ RETURNS anyelement
 AS 'MODULE_PATHNAME', 'do_nothing'
 LANGUAGE C STRICT VOLATILE;
 
+CREATE FUNCTION show_plan(query_hash int4,
+							index int4 default null,
+							format cstring default null)
+RETURNS SETOF RECORD
+AS 'MODULE_PATHNAME', 'show_plan'
+LANGUAGE C VOLATILE;
+
 CREATE OR REPLACE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
 LANGUAGE plpgsql AS $$
 DECLARE

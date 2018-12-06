@@ -46,8 +46,9 @@ typedef struct SrPlanCachedInfo {
 } SrPlanCachedInfo;
 
 typedef struct show_plan_funcctx {
-	uint32	query_hash;
-	int		index;
+	ExplainFormat	format;
+	char		   *output;
+	int				lines_count;
 } show_plan_funcctx;
 
 static SrPlanCachedInfo cachedInfo = {
@@ -882,34 +883,60 @@ do_nothing(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 }
 
+/*
+ *	Construct the result tupledesc for an EXPLAIN
+ */
+static TupleDesc
+make_tupledesc(ExplainState *es)
+{
+	TupleDesc	tupdesc;
+	Oid			result_type;
+
+	/* Check for XML format option */
+	switch (es->format)
+	{
+		case EXPLAIN_FORMAT_XML:
+			result_type = XMLOID;
+			break;
+		case EXPLAIN_FORMAT_JSON:
+			result_type = JSONOID;
+			break;
+		default:
+			result_type = TEXTOID;
+	}
+
+	/* Need a tuple descriptor representing a single TEXT or XML column */
+	tupdesc = CreateTemplateTupleDesc(1, false);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "QUERY PLAN", result_type, -1, 0);
+	return tupdesc;
+}
+
 Datum
 show_plan(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	show_plan_funcctx	*ctx;
 
-	PlannedStmt	   *pl_stmt = NULL;
-	LOCKMODE		heap_lock =  AccessShareLock;
-	Relation		sr_plans_heap,
-					sr_index_rel;
-	Snapshot		snapshot;
-	ScanKeyData		key;
-	char		   *queryString;
-	ExplainState   *es = NewExplainState();
-	uint32	index = 1,
-			query_hash = PG_GETARG_INT32(0);
-
 	if (SRF_IS_FIRSTCALL())
 	{
-		funcctx = SRF_FIRSTCALL_INIT();
-		funcctx->user_fctx = MemoryContextAlloc(funcctx->multi_call_memory_ctx,
-				sizeof(show_plan_funcctx));
+		MemoryContext	oldcxt;
+		PlannedStmt	   *pl_stmt = NULL;
+		LOCKMODE		heap_lock = AccessShareLock;
+		Relation		sr_plans_heap,
+						sr_index_rel;
+		Snapshot		snapshot;
+		ScanKeyData		key;
+		char		   *queryString;
+		ExplainState   *es = NewExplainState();
+		uint32			index,
+						query_hash = PG_GETARG_INT32(0);
 
-		uint32	index = 1,
-				query_hash = PG_GETARG_INT32(0);
+		funcctx = SRF_FIRSTCALL_INIT();
 
 		if (!PG_ARGISNULL(1))
-			index = PG_GETARG_INT32(1);
+			index = PG_GETARG_INT32(1);	/* show by index or enabled (if 0) */
+		else
+			index = 0;	/* show enabled one */
 
 		es->analyze = false;
 		es->costs = false;
@@ -917,16 +944,11 @@ show_plan(PG_FUNCTION_ARGS)
 		es->buffers = false;
 		es->timing = false;
 		es->summary = false;
-
-		/* emit opening boilerplate */
-		ExplainBeginOutput(es);
+		es->format = EXPLAIN_FORMAT_TEXT;
 
 		if (!PG_ARGISNULL(2))
 		{
 			char	*p = PG_GETARG_CSTRING(2);
-
-			/* default */
-			es->format = EXPLAIN_FORMAT_TEXT;
 
 			if (strcmp(p, "text") == 0)
 				es->format = EXPLAIN_FORMAT_TEXT;
@@ -939,7 +961,8 @@ show_plan(PG_FUNCTION_ARGS)
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("unrecognized value for EXPLAIN option \"%s\"", p)));
+						 errmsg("unrecognized value for output format \"%s\"", p),
+						 errhint("supported formats: 'text', 'xml', 'json', 'yaml'")));
 		}
 
 		/* Try to find already planned statement */
@@ -953,10 +976,10 @@ show_plan(PG_FUNCTION_ARGS)
 		if (pl_stmt == NULL)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("no saved plan by query hash \"%d\"", query_hash)));
+					 errmsg("could not find saved plan")));
 
+		ExplainBeginOutput(es);
 		ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL, NULL);
-
 		ExplainEndOutput(es);
 		Assert(es->indent == 0);
 
@@ -964,13 +987,59 @@ show_plan(PG_FUNCTION_ARGS)
 		index_close(sr_index_rel, heap_lock);
 		heap_close(sr_plans_heap, heap_lock);
 
-		if (es->format == EXPLAIN_FORMAT_TEXT)
-			do_text_output_multiline(tstate, es->str->data);
-		else
-			do_text_output_oneline(tstate, es->str->data);
+		oldcxt = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		funcctx->tuple_desc = BlessTupleDesc(make_tupledesc(es));
+		funcctx->user_fctx = palloc(sizeof(show_plan_funcctx));
+		ctx = (show_plan_funcctx *) funcctx->user_fctx;
+
+		ctx->format = es->format;
+		ctx->output = pstrdup(es->str->data);
+		MemoryContextSwitchTo(oldcxt);
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
+	ctx = (show_plan_funcctx *) funcctx->user_fctx;
+
+	/* if there is a string and not an end of string */
+	if (ctx->output && *ctx->output)
+	{
+		HeapTuple	tuple;
+		Datum		values[1];
+		bool		isnull[1] = {false};
+
+		if (ctx->format != EXPLAIN_FORMAT_TEXT)
+		{
+			values[0] = PointerGetDatum(cstring_to_text(ctx->output));
+			ctx->output = NULL;
+		}
+		else
+		{
+			char	   *txt = ctx->output;
+			char	   *eol;
+			int			len;
+
+			eol = strchr(txt, '\n');
+			if (eol)
+			{
+				len = eol - txt;
+				eol++;
+			}
+			else
+			{
+				len = strlen(txt);
+				eol = txt + len;
+			}
+
+			values[0] = PointerGetDatum(cstring_to_text_with_len(txt, len));
+			ctx->output = txt = eol;
+		}
+
+		tuple = heap_form_tuple(funcctx->tuple_desc, values, isnull);
+		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
+	}
+
+	SRF_RETURN_DONE(funcctx);
 }
 
 /*

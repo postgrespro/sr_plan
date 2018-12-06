@@ -20,7 +20,7 @@ CREATE INDEX sr_plans_query_index_oids ON sr_plans USING gin(index_reloids);
 
 CREATE FUNCTION _p(anyelement)
 RETURNS anyelement
-AS 'MODULE_PATHNAME'
+AS 'MODULE_PATHNAME', 'do_nothing'
 LANGUAGE C STRICT VOLATILE;
 
 CREATE OR REPLACE FUNCTION sr_plan_invalid_table() RETURNS event_trigger

@@ -22,7 +22,7 @@
 
 PG_MODULE_MAGIC;
 
-PG_FUNCTION_INFO_V1(_p);
+PG_FUNCTION_INFO_V1(do_nothing);
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -859,7 +859,7 @@ _PG_fini(void)
 }
 
 Datum
-_p(PG_FUNCTION_ARGS)
+do_nothing(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 }

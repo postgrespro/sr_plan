@@ -127,7 +127,7 @@ class Tests(unittest.TestCase):
                     node.stop()
 
                     shell("git clean -fdx")
-                    shell("git checkout -q 55f4704c7258527bd9ccd54cb35790a8e438caaa")
+                    shell("git checkout -q 41d96bf13")
                     shell(compilation)
 
                     node.start()

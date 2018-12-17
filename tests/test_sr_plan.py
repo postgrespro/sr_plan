@@ -26,7 +26,7 @@ repo_dir = os.path.abspath(os.path.join(my_dir, '../'))
 temp_dir = tempfile.mkdtemp()
 
 upgrade_to = '1.2'
-check_upgrade_from = ['1.1.0']
+check_upgrade_from = ['rel_1.0', '1.1.0']
 
 compilation = '''
 make USE_PGXS=1 clean
@@ -127,7 +127,7 @@ class Tests(unittest.TestCase):
                     node.stop()
 
                     shell("git clean -fdx")
-                    shell("git checkout -q 41d96bf13")
+                    shell("git checkout -q master")
                     shell(compilation)
 
                     node.start()

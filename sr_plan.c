@@ -979,7 +979,11 @@ show_plan(PG_FUNCTION_ARGS)
 					 errmsg("could not find saved plan")));
 
 		ExplainBeginOutput(es);
+#if PG_VERSION_NUM >= 100000
 		ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL, NULL);
+#else
+		ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL);
+#endif
 		ExplainEndOutput(es);
 		Assert(es->indent == 0);
 

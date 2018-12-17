@@ -1,23 +1,35 @@
+SET sr_plan.enabled = false;
+
+DROP FUNCTION sr_plan_invalid_table() CASCADE;
 DROP TABLE sr_plans CASCADE;
 CREATE TABLE sr_plans (
 	query_hash	int NOT NULL,
+	query_id	int8 NOT NULL,
 	plan_hash	int NOT NULL,
+	enable		boolean NOT NULL,
 	query		varchar NOT NULL,
 	plan		text NOT NULL,
-	enable		boolean NOT NULL,
 
 	reloids				oid[],
 	index_reloids		oid[]
 );
-
 CREATE INDEX sr_plans_query_hash_idx ON sr_plans (query_hash);
 CREATE INDEX sr_plans_query_oids ON sr_plans USING gin(reloids);
 CREATE INDEX sr_plans_query_index_oids ON sr_plans USING gin(index_reloids);
 
-DROP FUNCTION explain_jsonb_plan(jsonb) CASCADE;
-DROP FUNCTION sr_plan_invalid_table() CASCADE;
+CREATE OR REPLACE FUNCTION _p(anyelement)
+RETURNS anyelement
+AS 'MODULE_PATHNAME', 'do_nothing'
+LANGUAGE C STRICT VOLATILE;
 
-CREATE OR REPLACE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
+CREATE FUNCTION show_plan(query_hash int4,
+							index int4 default null,
+							format cstring default null)
+RETURNS SETOF RECORD
+AS 'MODULE_PATHNAME', 'show_plan'
+LANGUAGE C VOLATILE;
+
+CREATE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
 LANGUAGE plpgsql AS $$
 DECLARE
     obj		 record;
@@ -39,3 +51,5 @@ $$;
 
 CREATE EVENT TRIGGER sr_plan_invalid_table ON sql_drop
     EXECUTE PROCEDURE sr_plan_invalid_table();
+
+SET sr_plan.enabled = true;

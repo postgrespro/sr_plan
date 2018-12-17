@@ -581,6 +581,7 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		MemSet(nulls, 0, sizeof(nulls));
 
 		values[Anum_sr_query_hash - 1] = query_hash;
+		values[Anum_sr_query_id - 1] = Int64GetDatum(parse->queryId);
 		values[Anum_sr_plan_hash - 1] = plan_hash;
 		values[Anum_sr_query - 1] = CStringGetTextDatum(cachedInfo.query_text);
 		values[Anum_sr_plan - 1] = CStringGetTextDatum(plan_text);

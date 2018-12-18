@@ -69,12 +69,14 @@ select query_hash from sr_plans where query_hash=1000+_p(11);
 select query_hash from sr_plans where query_hash=1000+_p(-5);
 ```
 
-## Explain
+## EXPLAIN for saved plans
 
 It is possible to see saved plans by using `show_plan` function. It requires
 knowing query hash which could be fetched from `sr_plans` table.
 
 Examples:
+
+Show enabled plan for query hash:
 
 ```SQL
 SELECT show_plan(1);
@@ -86,7 +88,7 @@ SELECT show_plan(1);
 (3 rows)
 ```
 
-Get second plan:
+Get second saved plan by using `index` parameter (ignores `enable` attribute):
 
 ```SQL
 SELECT show_plan(1, index := 2);
@@ -98,7 +100,7 @@ SELECT show_plan(1, index := 2);
 (3 rows)
 ```
 
-Use another output format (supported formats are `json`, `text`, `xml`):
+Use another output format (supported formats are `json`, `text`, `xml`, `yaml`):
 
 ```SQL
 SELECT show_plan(1, format := 'json');

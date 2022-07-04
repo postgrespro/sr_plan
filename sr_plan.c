@@ -24,6 +24,7 @@ PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(do_nothing);
 PG_FUNCTION_INFO_V1(show_plan);
+PG_FUNCTION_INFO_V1(_p);
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -65,8 +66,13 @@ static SrPlanCachedInfo cachedInfo = {
 	NULL
 };
 
+#if PG_VERSION_NUM >= 130000
+static PlannedStmt *sr_planner(Query *parse, const char *query_string,
+								int cursorOptions, ParamListInfo boundParams);
+#else
 static PlannedStmt *sr_planner(Query *parse, int cursorOptions,
 								ParamListInfo boundParams);
+#endif
 
 static void sr_analyze(ParseState *pstate, Query *query);
 
@@ -118,7 +124,7 @@ invalidate_oids(void)
 	cachedInfo.index_reloids_index_oid = InvalidOid;
 }
 
-static void
+static bool 
 init_sr_plan(void)
 {
 	char		   *schema_name;
@@ -129,7 +135,7 @@ init_sr_plan(void)
 
 	cachedInfo.schema_oid = get_sr_plan_schema();
 	if (cachedInfo.schema_oid == InvalidOid)
-		return;
+		return false;
 
 	cachedInfo.sr_index_oid = sr_get_relname_oid(cachedInfo.schema_oid,
 										SR_PLANS_TABLE_QUERY_INDEX_NAME);
@@ -142,8 +148,10 @@ init_sr_plan(void)
 
 	if (cachedInfo.sr_plans_oid == InvalidOid ||
 			cachedInfo.sr_index_oid == InvalidOid)
-		elog(ERROR, "sr_plan extension installed incorrectly");
-
+	{
+		elog(WARNING, "sr_plan extension installed incorrectly. Do nothing. It's ok in pg_restore.");
+		return false;
+	}
 	/* Initialize _p function Oid */
 	schema_name = get_namespace_name(cachedInfo.schema_oid);
 	func_name_list = list_make2(makeString(schema_name), makeString("_p"));
@@ -152,13 +160,16 @@ init_sr_plan(void)
 	pfree(schema_name);
 
 	if (cachedInfo.fake_func == InvalidOid)
-		elog(ERROR, "sr_plan extension installed incorrectly");
-
+	{
+		elog(WARNING, "sr_plan extension installed incorrectly");
+		return false;
+	}
 	if (relcache_callback_needed)
 	{
 		CacheRegisterRelcacheCallback(sr_plan_relcache_hook, PointerGetDatum(NULL));
 		relcache_callback_needed = false;
 	}
+	return true;
 }
 
 /*
@@ -262,6 +273,8 @@ sr_analyze(ParseState *pstate, Query *query)
 			elog(NOTICE, "sr_plan was disabled");
 		}
 	}
+	if (srplan_post_parse_analyze_hook_next)
+		srplan_post_parse_analyze_hook_next(pstate, query);
 }
 
 /*
@@ -298,7 +311,11 @@ get_sr_plan_schema(void)
 				ObjectIdGetDatum(ext_schema));
 #endif
 
+#if PG_VERSION_NUM >= 130000
+	rel = table_open(ExtensionRelationId, heap_lock);
+#else
 	rel = heap_open(ExtensionRelationId, heap_lock);
+#endif
 	scandesc = systable_beginscan(rel, ExtensionOidIndexId, true,
 								  NULL, 1, entry);
 
@@ -312,7 +329,11 @@ get_sr_plan_schema(void)
 
 	systable_endscan(scandesc);
 
+#if PG_VERSION_NUM >= 130000
+	table_close(rel, heap_lock);
+#else
 	heap_close(rel, heap_lock);
+#endif
 
 	return result;
 }
@@ -390,14 +411,27 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 	PlannedStmt	   *pl_stmt = NULL;
 	HeapTuple		htup;
 	IndexScanDesc	query_index_scan;
+#if PG_VERSION_NUM >= 120000
+	TupleTableSlot *slot = table_slot_create(sr_plans_heap, NULL);
+#endif
 
 	query_index_scan = index_beginscan(sr_plans_heap, sr_index_rel, snapshot, 1, 0);
 	index_rescan(query_index_scan, key, 1, NULL, 0);
 
+#if PG_VERSION_NUM >= 120000
+	while (index_getnext_slot(query_index_scan, ForwardScanDirection, slot))
+#else
 	while ((htup = index_getnext(query_index_scan, ForwardScanDirection)) != NULL)
+#endif
 	{
 		Datum		search_values[Anum_sr_attcount];
 		bool		search_nulls[Anum_sr_attcount];
+#if PG_VERSION_NUM >= 120000
+		bool		shouldFree;
+
+		htup = ExecFetchSlotHeapTuple(slot, false, &shouldFree);
+		Assert(!shouldFree);
+#endif
 
 		heap_deform_tuple(htup, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
@@ -422,11 +456,19 @@ lookup_plan_by_query_hash(Snapshot snapshot, Relation sr_index_rel,
 	}
 
 	index_endscan(query_index_scan);
+#if PG_VERSION_NUM >= 120000
+	ExecDropSingleTupleTableSlot(slot);
+#endif
 	return pl_stmt;
 }
 
+/* planner_hook */
 static PlannedStmt *
+#if PG_VERSION_NUM >= 130000
+sr_planner(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams)
+#else
 sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
+#endif
 {
 	Datum			query_hash;
 	Relation		sr_plans_heap,
@@ -438,19 +480,27 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	bool			found;
 	Datum			plan_hash;
 	IndexScanDesc	query_index_scan;
-
 	PlannedStmt	   *pl_stmt = NULL;
 	LOCKMODE		heap_lock =  AccessShareLock;
 	struct QueryParamsContext qp_context = {true, NULL};
-
+#if PG_VERSION_NUM >= 120000
+	TupleTableSlot *slot;
+#endif
 	static int		level = 0;
 
 	level++;
 
+#if PG_VERSION_NUM >= 130000
+#define call_standard_planner() \
+	(srplan_planner_hook_next ? \
+		srplan_planner_hook_next(parse, query_string, cursorOptions, boundParams) : \
+		standard_planner(parse, query_string, cursorOptions, boundParams))
+#else
 #define call_standard_planner() \
 	(srplan_planner_hook_next ? \
 		srplan_planner_hook_next(parse, cursorOptions, boundParams) : \
 		standard_planner(parse, cursorOptions, boundParams))
+#endif
 
 	/* Only save plans for SELECT commands */
 	if (parse->commandType != CMD_SELECT || !cachedInfo.enabled
@@ -463,9 +513,17 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* Set extension Oid if needed */
 	if (cachedInfo.schema_oid == InvalidOid)
-		init_sr_plan();
+	{
+		if (!init_sr_plan())
+		{
+			/* Just call standard_planner() if schema doesn't exist. */
+			pl_stmt = call_standard_planner();
+			level--;
+			return pl_stmt;
+		}
+	}
 
-	if (cachedInfo.schema_oid == InvalidOid)
+	if (cachedInfo.schema_oid == InvalidOid || cachedInfo.sr_plans_oid  == InvalidOid)
 	{
 		/* Just call standard_planner() if schema doesn't exist. */
 		pl_stmt = call_standard_planner();
@@ -480,7 +538,11 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	/* Try to find already planned statement */
 	heap_lock = AccessShareLock;
+#if PG_VERSION_NUM >= 130000
+	sr_plans_heap = table_open(cachedInfo.sr_plans_oid, heap_lock);
+#else
 	sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+#endif
 	sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
 
 	qp_context.collect = false;
@@ -507,10 +569,18 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	/* close and get AccessExclusiveLock */
 	UnregisterSnapshot(snapshot);
 	index_close(sr_index_rel, heap_lock);
+#if PG_VERSION_NUM >= 130000
+	table_close(sr_plans_heap, heap_lock);
+#else
 	heap_close(sr_plans_heap, heap_lock);
+#endif
 
 	heap_lock = AccessExclusiveLock;
+#if PG_VERSION_NUM >= 130000
+	sr_plans_heap = table_open(cachedInfo.sr_plans_oid, heap_lock);
+#else
 	sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+#endif
 	sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
 
 	/* recheck plan in index */
@@ -536,19 +606,32 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	query_index_scan = index_beginscan(sr_plans_heap, sr_index_rel,
 									   snapshot, 1, 0);
 	index_rescan(query_index_scan, &key, 1, NULL, 0);
-
+#if PG_VERSION_NUM >= 120000
+	slot = table_slot_create(sr_plans_heap, NULL);
+#endif
 	found = false;
 	for (;;)
 	{
 		HeapTuple	htup;
 		Datum		search_values[Anum_sr_attcount];
 		bool		search_nulls[Anum_sr_attcount];
+#if PG_VERSION_NUM >= 120000
+		bool		shouldFree;
 
+		if (!index_getnext_slot(query_index_scan, ForwardScanDirection, slot))
+			break;
+
+		htup = ExecFetchSlotHeapTuple(slot, false, &shouldFree);
+		Assert(!shouldFree);
+#else
 		ItemPointer tid = index_getnext_tid(query_index_scan, ForwardScanDirection);
 		if (tid == NULL)
 			break;
 
 		htup = index_fetch_heap(query_index_scan);
+		if (htup == NULL)
+			break;
+#endif
 		heap_deform_tuple(htup, sr_plans_heap->rd_att,
 						  search_values, search_nulls);
 
@@ -560,7 +643,9 @@ sr_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		}
 	}
 	index_endscan(query_index_scan);
-
+#if PG_VERSION_NUM >= 120000
+	ExecDropSingleTupleTableSlot(slot);
+#endif
 	if (!found)
 	{
 		struct IndexIds	index_ids = {NIL};
@@ -676,7 +761,11 @@ cleanup:
 	UnregisterSnapshot(snapshot);
 
 	index_close(sr_index_rel, heap_lock);
+#if PG_VERSION_NUM >= 130000
+	table_close(sr_plans_heap, heap_lock);
+#else
 	heap_close(sr_plans_heap, heap_lock);
+#endif
 
 	return pl_stmt;
 }
@@ -713,7 +802,11 @@ sr_query_expr_walker(Node *node, void *context)
 		{
 			struct QueryParam *param = (struct QueryParam *) palloc(sizeof(struct QueryParam));
 			param->location = fexpr->location;
+#if PG_VERSION_NUM >= 130000
+			param->node = fexpr->args->elements[0].ptr_value;
+#else
 			param->node = fexpr->args->head->data.ptr_value;
+#endif
 			param->funccollid = fexpr->funccollid;
 
 			/* HACK: location could lost after planning */
@@ -735,7 +828,11 @@ sr_query_expr_walker(Node *node, void *context)
 				if (param->location == fexpr->funccollid)
 				{
 					fexpr->funccollid = param->funccollid;
+#if PG_VERSION_NUM >= 130000
+					fexpr->args->elements[0].ptr_value = param->node;
+#else
 					fexpr->args->head->data.ptr_value = param->node;
+#endif
 					if (cachedInfo.log_usage)
 						elog(cachedInfo.log_usage, "sr_plan: restored parameter on %d", param->location);
 
@@ -884,6 +981,12 @@ do_nothing(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 }
 
+Datum
+_p(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+}
+
 /*
  *	Construct the result tupledesc for an EXPLAIN
  */
@@ -907,7 +1010,11 @@ make_tupledesc(ExplainState *es)
 	}
 
 	/* Need a tuple descriptor representing a single TEXT or XML column */
+#if PG_VERSION_NUM >= 120000
+	tupdesc = CreateTemplateTupleDesc(1);
+#else
 	tupdesc = CreateTemplateTupleDesc(1, false);
+#endif
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "QUERY PLAN", result_type, -1, 0);
 	return tupdesc;
 }
@@ -927,10 +1034,13 @@ show_plan(PG_FUNCTION_ARGS)
 						sr_index_rel;
 		Snapshot		snapshot;
 		ScanKeyData		key;
+		ListCell       *lc;
 		char		   *queryString;
 		ExplainState   *es = NewExplainState();
 		uint32			index,
 						query_hash = PG_GETARG_INT32(0);
+		Relation       *rel_array;
+		int             i;
 
 		funcctx = SRF_FIRSTCALL_INIT();
 
@@ -967,7 +1077,11 @@ show_plan(PG_FUNCTION_ARGS)
 		}
 
 		/* Try to find already planned statement */
+#if PG_VERSION_NUM >= 130000
+		sr_plans_heap = table_open(cachedInfo.sr_plans_oid, heap_lock);
+#else
 		sr_plans_heap = heap_open(cachedInfo.sr_plans_oid, heap_lock);
+#endif
 		sr_index_rel = index_open(cachedInfo.sr_index_oid, heap_lock);
 
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
@@ -979,8 +1093,19 @@ show_plan(PG_FUNCTION_ARGS)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("could not find saved plan")));
 
+		rel_array = palloc(sizeof(Relation) * list_length(pl_stmt->relationOids));
+		i = 0;
+		foreach(lc, pl_stmt->relationOids)
+#if PG_VERSION_NUM >= 130000
+			rel_array[i++] = table_open(lfirst_oid(lc), heap_lock);
+#else
+			rel_array[i++] = heap_open(lfirst_oid(lc), heap_lock);
+#endif
+
 		ExplainBeginOutput(es);
-#if PG_VERSION_NUM >= 100000
+#if PG_VERSION_NUM >= 130000
+	ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL, NULL, NULL);
+#elif PG_VERSION_NUM >= 100000
 		ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL, NULL);
 #else
 		ExplainOnePlan(pl_stmt, NULL, es, queryString, NULL, NULL);
@@ -990,7 +1115,18 @@ show_plan(PG_FUNCTION_ARGS)
 
 		UnregisterSnapshot(snapshot);
 		index_close(sr_index_rel, heap_lock);
+#if PG_VERSION_NUM >= 130000
+		table_close(sr_plans_heap, heap_lock);
+#else
 		heap_close(sr_plans_heap, heap_lock);
+#endif
+
+		while (--i >= 0)
+#if PG_VERSION_NUM >= 130000
+			table_close(rel_array[i], heap_lock);
+#else
+			heap_close(rel_array[i], heap_lock);
+#endif
 
 		oldcxt = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 

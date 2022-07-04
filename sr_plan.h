@@ -12,7 +12,10 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
+
+#if PG_VERSION_NUM < 120000
 #include "utils/tqual.h"
+#endif
 #include "utils/guc.h"
 #include "utils/datum.h"
 #include "utils/inval.h"

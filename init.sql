@@ -31,7 +31,7 @@ RETURNS SETOF RECORD
 AS 'MODULE_PATHNAME', 'show_plan'
 LANGUAGE C VOLATILE;
 
-CREATE OR REPLACE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
+CREATE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
 LANGUAGE plpgsql AS $$
 DECLARE
     obj		 record;

@@ -41,7 +41,7 @@ Make an example query:
 select query_hash from sr_plans where query_hash=10;
 ```
 
-Disable saving the plan for the query:
+Disable saving the query:
 ```SQL
 set sr_plan.write_mode = false;
 ```
@@ -68,64 +68,3 @@ If we keep the plan for the query and enable it to be used also for the followin
 select query_hash from sr_plans where query_hash=1000+_p(11);
 select query_hash from sr_plans where query_hash=1000+_p(-5);
 ```
-
-## EXPLAIN for saved plans
-
-It is possible to see saved plans by using `show_plan` function. It requires
-knowing query hash which could be fetched from `sr_plans` table.
-
-Examples:
-
-Show enabled plan for query hash:
-
-```SQL
-SELECT show_plan(1);
-                  show_plan                   
-----------------------------------------------
- ("Seq Scan on public.explain_test")
- ("  Output: test_attr1, test_attr2")
- ("  Filter: (explain_test.test_attr1 = 10)")
-(3 rows)
-```
-
-Get second saved plan by using `index` parameter (ignores `enable` attribute):
-
-```SQL
-SELECT show_plan(1, index := 2);
-                  show_plan                   
-----------------------------------------------
- ("Seq Scan on public.explain_test")
- ("  Output: test_attr1, test_attr2")
- ("  Filter: (explain_test.test_attr1 = 10)")
-(3 rows)
-```
-
-Use another output format (supported formats are `json`, `text`, `xml`, `yaml`):
-
-```SQL
-SELECT show_plan(1, format := 'json');
-                      show_plan                       
-------------------------------------------------------
- ("[                                                 +
-   {                                                 +
-     ""Plan"": {                                     +
-       ""Node Type"": ""Seq Scan"",                  +
-       ""Parallel Aware"": false,                    +
-       ""Relation Name"": ""explain_test"",          +
-       ""Schema"": ""public"",                       +
-       ""Alias"": ""explain_test"",                  +
-       ""Output"": [""test_attr1"", ""test_attr2""], +
-       ""Filter"": ""(explain_test.test_attr1 = 10)""+
-     }                                               +
-   }                                                 +
- ]")
-(1 row)
-```
-
-## `pg_stat_statements` integration
-
-`sr_plans` table contains `query_id` columns which could be used to make
-joins with `pg_stat_statements` tables and views.
-
-Note: in `shared_preload_libraries` list `pg_stat_statements` should be
-specified after `sr_plan`.

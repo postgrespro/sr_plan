@@ -5,11 +5,10 @@
 
 CREATE TABLE sr_plans (
 	query_hash	int NOT NULL,
-	query_id	int8 NOT NULL,
 	plan_hash	int NOT NULL,
-	enable		boolean NOT NULL,
 	query		varchar NOT NULL,
 	plan		text NOT NULL,
+	enable		boolean NOT NULL,
 
 	reloids				oid[],
 	index_reloids		oid[]
@@ -21,17 +20,10 @@ CREATE INDEX sr_plans_query_index_oids ON sr_plans USING gin(index_reloids);
 
 CREATE FUNCTION _p(anyelement)
 RETURNS anyelement
-AS 'MODULE_PATHNAME', 'do_nothing'
+AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT VOLATILE;
 
-CREATE FUNCTION show_plan(query_hash int4,
-							index int4 default null,
-							format cstring default null)
-RETURNS SETOF RECORD
-AS 'MODULE_PATHNAME', 'show_plan'
-LANGUAGE C VOLATILE;
-
-CREATE OR REPLACE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
+CREATE FUNCTION sr_plan_invalid_table() RETURNS event_trigger
 LANGUAGE plpgsql AS $$
 DECLARE
     obj		 record;

@@ -74,11 +74,10 @@ void common_walker(const void *obj, void (*callback) (void *));
 enum
 {
 	Anum_sr_query_hash = 1,
-	Anum_sr_query_id,
 	Anum_sr_plan_hash,
-	Anum_sr_enable,
 	Anum_sr_query,
 	Anum_sr_plan,
+	Anum_sr_enable,
 	Anum_sr_reloids,
 	Anum_sr_index_reloids,
 	Anum_sr_attcount
